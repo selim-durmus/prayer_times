@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Prayer Times</string>
+    
+    <!-- Navigation -->
+    <string name="nav_prayer_times">Prayer Times</string>
+    <string name="nav_qibla">Qibla</string>
+    <string name="nav_settings">Settings</string>
+    
+    <!-- Prayer names -->
+    <string name="prayer_fajr">Fajr</string>
+    <string name="prayer_dhuhr">Dhuhr</string>
+    <string name="prayer_asr">Asr</string>
+    <string name="prayer_maghrib">Maghrib</string>
+    <string name="prayer_isha">Isha</string>
+    
+    <!-- Settings -->
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_enable_notifications">Enable prayer notifications</string>
+    <string name="settings_reminder_offset">Reminder offset</string>
+    <string name="settings_notification_style">Notification style</string>
+    <string name="settings_notification_style_before_end">Before prayer ends</string>
+    <string name="settings_notification_style_prayer_start">When a prayer starts</string>
+    <string name="settings_style_normal">Normal</string>
+    <string name="settings_style_alarm">Alarm-like</string>
+    <string name="settings_style_normal_desc">Standard notification style.</string>
+    <string name="settings_style_alarm_desc">Alarm-style alerts, like the Clock app.</string>
+    
+    <!-- Notifications -->
+    <string name="notification_channel_prayer_reminders">Prayer reminders</string>
+    <string name="notification_channel_prayer_reminders_desc">Alerts before prayer times end (notification sound)</string>
+    <string name="notification_channel_prayer_start">Prayer has begun</string>
+    <string name="notification_channel_prayer_start_desc">When a prayer starts (notification sound)</string>
+    <string name="notification_channel_prayer_start_adhan">Prayer has begun (Adhan)</string>
+    <string name="notification_channel_prayer_start_adhan_desc">Adhan on notification volume</string>
+    <string name="notification_prayer_started_title">%1$s has begun</string>
+    <string name="notification_channel_alarm_playback">Alarm-like playback</string>
+    <string name="notification_channel_alarm_playback_desc">Alarm-like sound plays until you swipe this notification away or it times out (no channel sound — avoids duplicate audio)</string>
+    <string name="notification_reminder_alarm_playback">%1$d minutes left in this prayer. Swipe this notification away to stop the alarm.</string>
+    <string name="notification_reminder_test_alarm_playback">Debug-only test. Offset %1$d minutes before end — swipe this notification away to stop.</string>
+    <string name="permission_fgs_media_playback">Foreground playback (alarm-like)</string>
+    <string name="settings_notify_prayer_start">Notify when a prayer starts</string>
+    <string name="settings_notify_prayer_start_sub">Respects the same prayer toggles below.</string>
+    <string name="settings_use_ezan_prayer_start">Play Ezan for prayer start</string>
+
+    <!-- Widgets -->
+    <string name="widget_name">Prayer Countdown</string>
+    <string name="widget_description">Shows countdown to the next prayer time</string>
+    <string name="widget_small_name">Prayer Countdown (Small)</string>
+    <string name="widget_small_description">Compact countdown to next prayer</string>
+</resources>

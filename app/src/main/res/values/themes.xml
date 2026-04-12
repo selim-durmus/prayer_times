@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-mode-only theme for Prayer Times app -->
+    <style name="Theme.PrayerTimes" parent="Theme.Material3.Dark.NoActionBar">
+        <!-- Primary colors - Gold/Amber -->
+        <item name="colorPrimary">#D4AF37</item>
+        <item name="colorOnPrimary">#0F0F0F</item>
+        <item name="colorPrimaryContainer">#AA8929</item>
+        <item name="colorOnPrimaryContainer">#E8E8E8</item>
+        
+        <!-- Secondary colors -->
+        <item name="colorSecondary">#E6C866</item>
+        <item name="colorOnSecondary">#0F0F0F</item>
+        <item name="colorSecondaryContainer">#252525</item>
+        <item name="colorOnSecondaryContainer">#E0E0E0</item>
+        
+        <!-- Background colors -->
+        <item name="android:colorBackground">#0F0F0F</item>
+        <item name="colorOnBackground">#E8E8E8</item>
+        
+        <!-- Surface colors -->
+        <item name="colorSurface">#1A1A1A</item>
+        <item name="colorOnSurface">#E0E0E0</item>
+        <item name="colorSurfaceVariant">#252525</item>
+        <item name="colorOnSurfaceVariant">#B0B0B0</item>
+        
+        <!-- Error colors -->
+        <item name="colorError">#CF6679</item>
+        <item name="colorOnError">#0F0F0F</item>
+        
+        <!-- Status bar and navigation bar -->
+        <item name="android:statusBarColor">#0F0F0F</item>
+        <item name="android:navigationBarColor">#1A1A1A</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Location permissions for fetching prayer times based on device location -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    
+    <!-- Internet permission for API calls to Aladhan -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    
+    <!-- Notification permission (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    <!-- Alarm permissions for exact notification scheduling -->
+    <!-- 
+        SCHEDULE_EXACT_ALARM: Required on Android 12+ for setExactAndAllowWhileIdle
+        USE_EXACT_ALARM: Alternative permission for apps with core alarm functionality
+        
+        Reference: https://developer.android.com/develop/background-work/services/alarms/schedule
+    -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    
+    <!-- Wake lock for ensuring device wakes for notifications -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
+    <!-- Receive boot completed to reschedule alarms after device restart -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    
+    <!-- Vibrate permission for alarm-style notifications -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    
+    <!-- Foreground service permission for WorkManager -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Alarm-like prayer alerts: explicit ringtone playback (Android 14+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    
+    <!-- 
+        HIGH_SAMPLING_RATE_SENSORS: Required on Android 12+ for accessing motion and 
+        position sensors at rates > 200Hz. While we use SENSOR_DELAY_UI (~60Hz), 
+        this permission can help with sensor registration reliability on some devices.
+        This is a normal permission (no runtime request needed).
+        
+        Reference: https://developer.android.com/reference/android/Manifest.permission#HIGH_SAMPLING_RATE_SENSORS
+    -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+
+    <application
+        android:name=".PrayerTimesApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.PrayerTimes"
+        tools:targetApi="36">
+        
+        <!-- Main Activity -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.PrayerTimes">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        
+        <!-- 
+            Notification Receiver for handling scheduled alarms.
+            Receives broadcasts from AlarmManager to trigger notifications.
+        -->
+        <receiver
+            android:name=".notifications.NotificationReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.tuttoposto.prayertimes.PRAYER_NOTIFICATION" />
+                <action android:name="com.tuttoposto.prayertimes.PRAYER_START" />
+                <action android:name="com.tuttoposto.prayertimes.TEST_NOTIFICATION" />
+                <action android:name="com.tuttoposto.prayertimes.TEST_PRAYER_START" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- 
+            Boot completed receiver to reschedule notifications after device restart.
+            AlarmManager alarms are cleared on device reboot, so we need to reschedule.
+        -->
+        <receiver
+            android:name=".notifications.BootCompletedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- 
+            Midnight sync receiver for daily prayer times refresh.
+            Triggered at 00:05 each day to fetch fresh prayer times for the new day.
+            Ensures morning prayers (Fajr) are never missed due to stale data.
+        -->
+        <receiver
+            android:name=".notifications.MidnightSyncReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.tuttoposto.prayertimes.MIDNIGHT_SYNC" />
+            </intent-filter>
+        </receiver>
+        
+        <!-- 2x1 home screen widget: prayer name, time, countdown, progress bar -->
+        <receiver
+            android:name=".widget.PrayerWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_prayer_times_info" />
+        </receiver>
+        
+        <!-- 1x1 compact home screen widget: prayer name and countdown -->
+        <receiver
+            android:name=".widget.PrayerWidgetSmallProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_prayer_times_small_info" />
+        </receiver>
+        
+        <!-- Periodic alarm receiver for minute-by-minute widget countdown updates -->
+        <receiver
+            android:name=".widget.WidgetUpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.tuttoposto.prayertimes.WIDGET_UPDATE" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".notifications.PrayerAlarmPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <receiver
+            android:name=".notifications.PrayerAlarmDismissReceiver"
+            android:exported="false" />
+        
+    </application>
+
+</manifest>

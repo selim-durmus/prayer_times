@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_small_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_background"
+    android:gravity="center"
+    android:padding="6dp">
+
+    <TextView
+        android:id="@+id/widget_small_prayer_name"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Maghrib"
+        android:textColor="#D4AF37"
+        android:textSize="12sp"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1" />
+
+    <TextView
+        android:id="@+id/widget_small_countdown"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="2h 15m"
+        android:textColor="#E8E8E8"
+        android:textSize="16sp"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1"
+        android:layout_marginTop="2dp" />
+
+</LinearLayout>

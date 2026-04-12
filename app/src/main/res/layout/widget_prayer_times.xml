@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_background"
+    android:padding="12dp"
+    android:gravity="center_vertical">
+
+    <TextView
+        android:id="@+id/widget_prayer_info"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Maghrib · 17:41"
+        android:textColor="#D4AF37"
+        android:textSize="13sp"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <TextView
+        android:id="@+id/widget_countdown"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="2h 15m"
+        android:textColor="#E8E8E8"
+        android:textSize="22sp"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1"
+        android:layout_marginTop="2dp" />
+
+    <ProgressBar
+        android:id="@+id/widget_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:progressDrawable="@drawable/widget_progress_drawable"
+        android:max="100"
+        android:progress="0"
+        android:layout_marginTop="6dp" />
+
+</LinearLayout>
