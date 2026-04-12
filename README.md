@@ -26,7 +26,3 @@ No backend or API key is required for default Aladhan usage.
 
 - Architecture and file roles: see **`PROJECT_CONTEXT.md`** in the repo root.  
 - Canonical code lives under `com.tuttoposto.prayertimes` (`data.models`, `data.api`, `data.repository`, `ui`, `notifications`, `widget`, `workers`).
-
-## License
-
-Specify your license here (e.g. MIT, Apache-2.0) if you publish publicly.
