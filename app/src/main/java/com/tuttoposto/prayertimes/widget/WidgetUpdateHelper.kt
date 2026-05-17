@@ -60,17 +60,15 @@ object WidgetUpdateHelper {
         val views = RemoteViews(context.packageName, R.layout.widget_prayer_times)
 
         if (info != null) {
-            val label = if (info.isTomorrow) {
-                "${info.prayerName} tomorrow · ${info.prayerTimeFormatted}"
-            } else {
-                "${info.prayerName} · ${info.prayerTimeFormatted}"
-            }
-            views.setTextViewText(R.id.widget_prayer_info, label)
+            val name = if (info.isTomorrow) "${info.prayerName} ᵗᵐʳʷ" else info.prayerName
+            views.setTextViewText(R.id.widget_prayer_info, name)
+            views.setTextViewText(R.id.widget_prayer_time, info.prayerTimeFormatted)
             views.setTextViewText(R.id.widget_countdown, info.countdownText)
             views.setProgressBar(R.id.widget_progress, 100, info.progressPercent, false)
         } else {
-            views.setTextViewText(R.id.widget_prayer_info, "Prayer Times")
-            views.setTextViewText(R.id.widget_countdown, "Open app to load")
+            views.setTextViewText(R.id.widget_prayer_info, "Prayer")
+            views.setTextViewText(R.id.widget_prayer_time, "—")
+            views.setTextViewText(R.id.widget_countdown, "Open app")
             views.setProgressBar(R.id.widget_progress, 100, 0, false)
         }
 
