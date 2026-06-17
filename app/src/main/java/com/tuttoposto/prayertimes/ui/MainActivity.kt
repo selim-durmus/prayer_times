@@ -43,6 +43,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.flow.map
 import androidx.compose.ui.Alignment
@@ -64,6 +65,7 @@ import com.tuttoposto.prayertimes.ui.screens.MonthlyCalendarScreen
 import com.tuttoposto.prayertimes.ui.screens.PrayerTimesScreen
 import com.tuttoposto.prayertimes.ui.screens.QiblaScreen
 import com.tuttoposto.prayertimes.ui.screens.SettingsScreen
+import com.tuttoposto.prayertimes.ui.screens.TasbihatScreen
 import com.tuttoposto.prayertimes.ui.theme.PrayerTimesTheme
 import com.tuttoposto.prayertimes.workers.PrayerTimesSyncWorker
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -364,9 +366,7 @@ private val screens = listOf(
 )
 
 @Composable
-private fun PrayerTimesPager() {
-    val pagerState = rememberPagerState(pageCount = { 2 })
-
+private fun PrayerTimesPager(pagerState: androidx.compose.foundation.pager.PagerState) {
     Box(modifier = Modifier.fillMaxSize()) {
         HorizontalPager(
             state = pagerState,
@@ -375,6 +375,7 @@ private fun PrayerTimesPager() {
             when (page) {
                 0 -> PrayerTimesScreen()
                 1 -> MonthlyCalendarScreen()
+                2 -> TasbihatScreen()
             }
         }
 
@@ -385,7 +386,7 @@ private fun PrayerTimesPager() {
                 .padding(bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            repeat(2) { index ->
+            repeat(3) { index ->
                 Box(
                     modifier = Modifier
                         .size(6.dp)
@@ -405,7 +406,10 @@ private fun PrayerTimesPager() {
 @Composable
 fun MainScreen() {
     val navController = rememberNavController()
-    
+    // Hoisted so tapping the Prayer Times tab can reset the pager back to the first page.
+    val prayerPagerState = rememberPagerState(pageCount = { 3 })
+    val scope = rememberCoroutineScope()
+
     Scaffold(
         bottomBar = {
             NavigationBar(
@@ -428,6 +432,10 @@ fun MainScreen() {
                         label = { Text(screen.title) },
                         selected = selected,
                         onClick = {
+                            // Tapping the Prayer Times tab always returns to its first page.
+                            if (screen.route == Screen.PrayerTimes.route) {
+                                scope.launch { prayerPagerState.scrollToPage(0) }
+                            }
                             navController.navigate(screen.route) {
                                 // Pop up to the start destination of the graph to
                                 // avoid building up a large stack of destinations
@@ -463,7 +471,7 @@ fun MainScreen() {
                 startDestination = Screen.PrayerTimes.route
             ) {
                 composable(Screen.PrayerTimes.route) {
-                    PrayerTimesPager()
+                    PrayerTimesPager(prayerPagerState)
                 }
                 composable(Screen.Qibla.route) {
                     QiblaScreen()
