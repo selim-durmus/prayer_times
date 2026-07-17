@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -42,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -132,7 +134,7 @@ fun SettingsScreen(
             onEndReminderStyleChange = viewModel::setNotificationStyleEndReminder,
             onPrayerStartStyleChange = viewModel::setNotificationStylePrayerStart,
             onNotifyPrayerStartChange = viewModel::setNotifyOnPrayerStart,
-            onUseEzanForPrayerStartChange = viewModel::setUseEzanForPrayerStart
+            onPrayerEzanToggle = viewModel::setPrayerEzanEnabled
         )
         
         Spacer(modifier = Modifier.height(16.dp))
@@ -214,7 +216,7 @@ private fun NotificationsSection(
     onEndReminderStyleChange: (NotificationStyle) -> Unit,
     onPrayerStartStyleChange: (NotificationStyle) -> Unit,
     onNotifyPrayerStartChange: (Boolean) -> Unit,
-    onUseEzanForPrayerStartChange: (Boolean) -> Unit
+    onPrayerEzanToggle: (String, Boolean) -> Unit
 ) {
     SectionCard(title = "Notifications") {
         // Global toggle
@@ -238,31 +240,55 @@ private fun NotificationsSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
-            
-            SettingsToggleRow(
+
+            if (state.notifyOnPrayerStart) {
+                Text(
+                    text = stringResource(R.string.settings_ezan_per_prayer_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            PrayerNotificationRow(
                 title = "Fajr",
-                checked = state.fajrEnabled,
-                onCheckedChange = { onPrayerToggle("FAJR", it) }
+                enabled = state.fajrEnabled,
+                onEnabledChange = { onPrayerToggle("FAJR", it) },
+                showEzan = state.notifyOnPrayerStart,
+                ezanEnabled = state.fajrEzan,
+                onEzanChange = { onPrayerEzanToggle("FAJR", it) }
             )
-            SettingsToggleRow(
+            PrayerNotificationRow(
                 title = "Dhuhr",
-                checked = state.dhuhrEnabled,
-                onCheckedChange = { onPrayerToggle("DHUHR", it) }
+                enabled = state.dhuhrEnabled,
+                onEnabledChange = { onPrayerToggle("DHUHR", it) },
+                showEzan = state.notifyOnPrayerStart,
+                ezanEnabled = state.dhuhrEzan,
+                onEzanChange = { onPrayerEzanToggle("DHUHR", it) }
             )
-            SettingsToggleRow(
+            PrayerNotificationRow(
                 title = "Asr",
-                checked = state.asrEnabled,
-                onCheckedChange = { onPrayerToggle("ASR", it) }
+                enabled = state.asrEnabled,
+                onEnabledChange = { onPrayerToggle("ASR", it) },
+                showEzan = state.notifyOnPrayerStart,
+                ezanEnabled = state.asrEzan,
+                onEzanChange = { onPrayerEzanToggle("ASR", it) }
             )
-            SettingsToggleRow(
+            PrayerNotificationRow(
                 title = "Maghrib",
-                checked = state.maghribEnabled,
-                onCheckedChange = { onPrayerToggle("MAGHRIB", it) }
+                enabled = state.maghribEnabled,
+                onEnabledChange = { onPrayerToggle("MAGHRIB", it) },
+                showEzan = state.notifyOnPrayerStart,
+                ezanEnabled = state.maghribEzan,
+                onEzanChange = { onPrayerEzanToggle("MAGHRIB", it) }
             )
-            SettingsToggleRow(
+            PrayerNotificationRow(
                 title = "Isha",
-                checked = state.ishaEnabled,
-                onCheckedChange = { onPrayerToggle("ISHA", it) }
+                enabled = state.ishaEnabled,
+                onEnabledChange = { onPrayerToggle("ISHA", it) },
+                showEzan = state.notifyOnPrayerStart,
+                ezanEnabled = state.ishaEzan,
+                onEzanChange = { onPrayerEzanToggle("ISHA", it) }
             )
 
             HorizontalDivider(
@@ -277,14 +303,6 @@ private fun NotificationsSection(
                 onCheckedChange = onNotifyPrayerStartChange
             )
 
-            if (state.notifyOnPrayerStart) {
-                SettingsToggleRow(
-                    title = stringResource(R.string.settings_use_ezan_prayer_start),
-                    checked = state.useEzanForPrayerStart,
-                    onCheckedChange = onUseEzanForPrayerStartChange
-                )
-            }
-            
             HorizontalDivider(
                 color = PrayerTimesColors.divider,
                 modifier = Modifier.padding(vertical = 12.dp)
@@ -1133,6 +1151,62 @@ private fun SectionCard(
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             content()
+        }
+    }
+}
+
+/**
+ * Per-prayer notification row: the prayer name, its enable switch, and — when prayer-start
+ * alerts are on — a slightly smaller Ezan switch to the right (on = adhan, off = normal sound).
+ */
+@Composable
+private fun PrayerNotificationRow(
+    title: String,
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    showEzan: Boolean,
+    ezanEnabled: Boolean,
+    onEzanChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f)
+        )
+
+        Switch(
+            checked = enabled,
+            onCheckedChange = onEnabledChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        )
+
+        if (showEzan) {
+            Spacer(modifier = Modifier.width(12.dp))
+            Switch(
+                checked = ezanEnabled,
+                onCheckedChange = onEzanChange,
+                enabled = enabled,
+                modifier = Modifier.scale(0.8f),
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.primary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            )
         }
     }
 }

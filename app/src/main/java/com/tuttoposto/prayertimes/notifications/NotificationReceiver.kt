@@ -78,7 +78,7 @@ class NotificationReceiver : BroadcastReceiver() {
                         context = context,
                         prayerName = prayerName,
                         style = settings.notificationStylePrayerStart,
-                        useEzan = settings.useEzanForPrayerStart
+                        useEzan = settings.prayerEzanPreferences.isEzan(prayer)
                     )
                     Log.d(TAG, "✅ Prayer start notification SHOWN for $prayerName")
                 }
@@ -171,7 +171,7 @@ class NotificationReceiver : BroadcastReceiver() {
                     context = context,
                     prayerName = Prayer.MAGHRIB.name,
                     style = settings.notificationStylePrayerStart,
-                    useEzan = settings.useEzanForPrayerStart,
+                    useEzan = settings.prayerEzanPreferences.isEzan(Prayer.MAGHRIB),
                     notificationIdOverride = NotificationHelper.NOTIFICATION_ID_TEST_PRAYER_START
                 )
                 Log.d(TAG, "✅ Test prayer-start notification SHOWN")

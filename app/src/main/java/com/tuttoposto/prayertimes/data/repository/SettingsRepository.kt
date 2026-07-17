@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.tuttoposto.prayertimes.data.models.AppSettings
 import com.tuttoposto.prayertimes.data.models.NotificationStyle
+import com.tuttoposto.prayertimes.data.models.PrayerEzanPreferences
 import com.tuttoposto.prayertimes.data.models.PrayerNotificationPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -43,6 +44,7 @@ class SettingsRepository(private val context: Context) {
         val DEBUG_MODE_ENABLED = booleanPreferencesKey("debug_mode_enabled")
         val USE_AMOLED_THEME = booleanPreferencesKey("use_amoled_theme")
         val NOTIFY_ON_PRAYER_START = booleanPreferencesKey("notify_on_prayer_start")
+        /** Legacy global Ezan toggle; used to seed per-prayer defaults when [FAJR_EZAN] etc. are absent. */
         val USE_EZAN_FOR_PRAYER_START = booleanPreferencesKey("use_ezan_for_prayer_start")
 
         // Per-prayer toggles
@@ -51,6 +53,13 @@ class SettingsRepository(private val context: Context) {
         val ASR_ENABLED = booleanPreferencesKey("asr_enabled")
         val MAGHRIB_ENABLED = booleanPreferencesKey("maghrib_enabled")
         val ISHA_ENABLED = booleanPreferencesKey("isha_enabled")
+
+        // Per-prayer Ezan (adhan) toggles for the prayer-start alert
+        val FAJR_EZAN = booleanPreferencesKey("fajr_ezan")
+        val DHUHR_EZAN = booleanPreferencesKey("dhuhr_ezan")
+        val ASR_EZAN = booleanPreferencesKey("asr_ezan")
+        val MAGHRIB_EZAN = booleanPreferencesKey("maghrib_ezan")
+        val ISHA_EZAN = booleanPreferencesKey("isha_ezan")
     }
     
     /**
@@ -65,6 +74,8 @@ class SettingsRepository(private val context: Context) {
         val startStyle = prefs[Keys.NOTIFICATION_STYLE_START]?.let { parseNotificationStyle(it) }
             ?: legacyStyle
             ?: NotificationStyle.NORMAL
+        // Seed per-prayer Ezan defaults from the legacy global toggle so existing users keep their choice.
+        val legacyEzan = prefs[Keys.USE_EZAN_FOR_PRAYER_START] ?: true
         AppSettings(
             globalNotificationsEnabled = prefs[Keys.GLOBAL_NOTIFICATIONS_ENABLED] ?: true,
             prayerNotificationPreferences = PrayerNotificationPreferences(
@@ -80,7 +91,13 @@ class SettingsRepository(private val context: Context) {
             debugModeEnabled = prefs[Keys.DEBUG_MODE_ENABLED] ?: false,
             useAmoledTheme = prefs[Keys.USE_AMOLED_THEME] ?: false,
             notifyOnPrayerStart = prefs[Keys.NOTIFY_ON_PRAYER_START] ?: false,
-            useEzanForPrayerStart = prefs[Keys.USE_EZAN_FOR_PRAYER_START] ?: true
+            prayerEzanPreferences = PrayerEzanPreferences(
+                fajr = prefs[Keys.FAJR_EZAN] ?: legacyEzan,
+                dhuhr = prefs[Keys.DHUHR_EZAN] ?: legacyEzan,
+                asr = prefs[Keys.ASR_EZAN] ?: legacyEzan,
+                maghrib = prefs[Keys.MAGHRIB_EZAN] ?: legacyEzan,
+                isha = prefs[Keys.ISHA_EZAN] ?: legacyEzan
+            )
         )
     }
     
@@ -172,9 +189,18 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
-    suspend fun setUseEzanForPrayerStart(enabled: Boolean) {
+    /**
+     * Update the per-prayer Ezan (adhan) toggle for the prayer-start alert.
+     */
+    suspend fun setPrayerEzanEnabled(prayerName: String, enabled: Boolean) {
         context.settingsDataStore.edit { prefs ->
-            prefs[Keys.USE_EZAN_FOR_PRAYER_START] = enabled
+            when (prayerName.uppercase()) {
+                "FAJR" -> prefs[Keys.FAJR_EZAN] = enabled
+                "DHUHR" -> prefs[Keys.DHUHR_EZAN] = enabled
+                "ASR" -> prefs[Keys.ASR_EZAN] = enabled
+                "MAGHRIB" -> prefs[Keys.MAGHRIB_EZAN] = enabled
+                "ISHA" -> prefs[Keys.ISHA_EZAN] = enabled
+            }
         }
     }
 

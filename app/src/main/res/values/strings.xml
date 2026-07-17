@@ -41,7 +41,7 @@
     <string name="permission_fgs_media_playback">Foreground playback (alarm-like)</string>
     <string name="settings_notify_prayer_start">Notify when a prayer starts</string>
     <string name="settings_notify_prayer_start_sub">Respects the same prayer toggles below.</string>
-    <string name="settings_use_ezan_prayer_start">Play Ezan for prayer start</string>
+    <string name="settings_ezan_per_prayer_hint">Right switch: play Ezan (adhan) at prayer start · off = normal sound</string>
 
     <!-- Widgets -->
     <string name="widget_name">Prayer Countdown</string>

@@ -50,6 +50,47 @@ data class PrayerNotificationPreferences(
 }
 
 /**
+ * Per-prayer Ezan (adhan) preferences for the "prayer has begun" alert.
+ * When true, that prayer's start alert plays the bundled adhan; when false it uses the
+ * default notification sound. Applied per-notification at fire time.
+ */
+data class PrayerEzanPreferences(
+    val fajr: Boolean = true,
+    val dhuhr: Boolean = true,
+    val asr: Boolean = true,
+    val maghrib: Boolean = true,
+    val isha: Boolean = true
+) {
+    fun isEzan(prayer: Prayer): Boolean = when (prayer) {
+        Prayer.FAJR -> fajr
+        Prayer.DHUHR -> dhuhr
+        Prayer.ASR -> asr
+        Prayer.MAGHRIB -> maghrib
+        Prayer.ISHA -> isha
+    }
+
+    fun toMap(): Map<String, Boolean> = mapOf(
+        Prayer.FAJR.name to fajr,
+        Prayer.DHUHR.name to dhuhr,
+        Prayer.ASR.name to asr,
+        Prayer.MAGHRIB.name to maghrib,
+        Prayer.ISHA.name to isha
+    )
+
+    companion object {
+        fun fromMap(map: Map<String, Boolean>): PrayerEzanPreferences {
+            return PrayerEzanPreferences(
+                fajr = map[Prayer.FAJR.name] ?: true,
+                dhuhr = map[Prayer.DHUHR.name] ?: true,
+                asr = map[Prayer.ASR.name] ?: true,
+                maghrib = map[Prayer.MAGHRIB.name] ?: true,
+                isha = map[Prayer.ISHA.name] ?: true
+            )
+        }
+    }
+}
+
+/**
  * Main app settings data class.
  * Controls all notification-related behavior.
  * 
@@ -59,7 +100,7 @@ data class PrayerNotificationPreferences(
  * @param notificationStyleEndReminder Normal or Alarm-like for “before prayer ends” alerts
  * @param notificationStylePrayerStart Normal or Alarm-like for “prayer has begun” alerts
  * @param notifyOnPrayerStart Alert when each enabled prayer's time begins (same per-prayer toggles)
- * @param useEzanForPrayerStart Use bundled adhan in res/raw/ezan.* when true; otherwise default notification sound
+ * @param prayerEzanPreferences Per-prayer choice of bundled adhan (res/raw/ezan.*) vs. default notification sound for the prayer-start alert
  * @param debugModeEnabled Hidden debug mode, activated by long-pressing Settings title
  */
 data class AppSettings(
@@ -69,7 +110,7 @@ data class AppSettings(
     val notificationStyleEndReminder: NotificationStyle = NotificationStyle.NORMAL,
     val notificationStylePrayerStart: NotificationStyle = NotificationStyle.NORMAL,
     val notifyOnPrayerStart: Boolean = false,
-    val useEzanForPrayerStart: Boolean = true,
+    val prayerEzanPreferences: PrayerEzanPreferences = PrayerEzanPreferences(),
     val debugModeEnabled: Boolean = false, // Hidden by default
     val useAmoledTheme: Boolean = false
 ) {

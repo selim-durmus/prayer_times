@@ -194,7 +194,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             notificationStyleEndReminder = settings.notificationStyleEndReminder,
             notificationStylePrayerStart = settings.notificationStylePrayerStart,
             notifyOnPrayerStart = settings.notifyOnPrayerStart,
-            useEzanForPrayerStart = settings.useEzanForPrayerStart,
+            fajrEzan = settings.prayerEzanPreferences.fajr,
+            dhuhrEzan = settings.prayerEzanPreferences.dhuhr,
+            asrEzan = settings.prayerEzanPreferences.asr,
+            maghribEzan = settings.prayerEzanPreferences.maghrib,
+            ishaEzan = settings.prayerEzanPreferences.isha,
             debugModeEnabled = settings.debugModeEnabled,
             useAmoledTheme = settings.useAmoledTheme,
             prayerTimesInfo = prayerTimesDisplay,
@@ -262,9 +266,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun setUseEzanForPrayerStart(enabled: Boolean) {
+    fun setPrayerEzanEnabled(prayerName: String, enabled: Boolean) {
         viewModelScope.launch {
-            settingsRepository.setUseEzanForPrayerStart(enabled)
+            settingsRepository.setPrayerEzanEnabled(prayerName, enabled)
         }
     }
     
@@ -502,7 +506,12 @@ data class SettingsUiState(
     val notificationStyleEndReminder: NotificationStyle = NotificationStyle.NORMAL,
     val notificationStylePrayerStart: NotificationStyle = NotificationStyle.NORMAL,
     val notifyOnPrayerStart: Boolean = false,
-    val useEzanForPrayerStart: Boolean = true,
+    // Per-prayer Ezan (adhan) toggles for the prayer-start alert
+    val fajrEzan: Boolean = true,
+    val dhuhrEzan: Boolean = true,
+    val asrEzan: Boolean = true,
+    val maghribEzan: Boolean = true,
+    val ishaEzan: Boolean = true,
 
     // Debug mode (hidden by default, activated by long-pressing Settings title)
     val debugModeEnabled: Boolean = false,
