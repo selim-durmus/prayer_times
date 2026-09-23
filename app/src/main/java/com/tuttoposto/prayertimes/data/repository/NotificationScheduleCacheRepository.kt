@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.time.LocalDate
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 
 private val Context.notificationScheduleDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "notification_schedule_cache"
@@ -30,13 +33,20 @@ private val Context.notificationScheduleDataStore: DataStore<Preferences> by pre
  * 2. Track what notifications are currently scheduled
  * 3. Restore schedule information after app restart
  */
-class NotificationScheduleCacheRepository(private val context: Context) {
+class NotificationScheduleCacheRepository internal constructor(private val dataStore: DataStore<Preferences>) {
+    constructor(context: Context) : this(context.notificationScheduleDataStore)
+    private val entryAdapter = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+        .adapter<List<PrayerNotificationEntry>>(
+            Types.newParameterizedType(List::class.java, PrayerNotificationEntry::class.java)
+        )
     
     private object Keys {
         val DATE = stringPreferencesKey("schedule_date")
         val TIMEZONE = stringPreferencesKey("schedule_timezone")
         val OFFSET_MINUTES = intPreferencesKey("schedule_offset_minutes")
         val GLOBAL_ENABLED = booleanPreferencesKey("schedule_global_enabled")
+        val ENTRIES = stringPreferencesKey("schedule_entries_v2")
+        val START_ENTRIES = stringPreferencesKey("schedule_start_entries_v2")
         
         // Per-prayer toggles stored in cache
         val FAJR_TOGGLE = booleanPreferencesKey("schedule_fajr_toggle")
@@ -62,7 +72,7 @@ class NotificationScheduleCacheRepository(private val context: Context) {
     /**
      * Flow of current notification schedule cache.
      */
-    val scheduleCacheFlow: Flow<NotificationScheduleCache> = context.notificationScheduleDataStore.data.map { prefs ->
+    val scheduleCacheFlow: Flow<NotificationScheduleCache> = dataStore.data.map { prefs ->
         val dateStr = prefs[Keys.DATE]
         if (dateStr == null) {
             return@map NotificationScheduleCache.EMPTY
@@ -76,7 +86,7 @@ class NotificationScheduleCacheRepository(private val context: Context) {
             Prayer.ISHA.name to (prefs[Keys.ISHA_TOGGLE] ?: true)
         )
         
-        val entries = buildList {
+        val entries = prefs[Keys.ENTRIES]?.let { entryAdapter.fromJson(it) } ?: buildList {
             val fajrTime = prefs[Keys.FAJR_NOTIFICATION_TIME] ?: 0L
             if (fajrTime > 0) {
                 add(PrayerNotificationEntry(Prayer.FAJR.name, fajrTime, NotificationHelper.NOTIFICATION_ID_FAJR))
@@ -103,7 +113,7 @@ class NotificationScheduleCacheRepository(private val context: Context) {
             }
         }
 
-        val startEntries = buildList {
+        val startEntries = prefs[Keys.START_ENTRIES]?.let { entryAdapter.fromJson(it) } ?: buildList {
             val t = prefs[Keys.FAJR_START_TIME] ?: 0L
             if (t > 0) {
                 add(
@@ -178,11 +188,14 @@ class NotificationScheduleCacheRepository(private val context: Context) {
      * Save updated schedule cache.
      */
     suspend fun saveScheduleCache(cache: NotificationScheduleCache) {
-        context.notificationScheduleDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.DATE] = cache.date.toString()
             prefs[Keys.TIMEZONE] = cache.timezoneId
             prefs[Keys.OFFSET_MINUTES] = cache.reminderOffsetMinutes
             prefs[Keys.GLOBAL_ENABLED] = cache.globalNotificationsEnabled
+            // Preserve both today and tomorrow, including their actual PendingIntent IDs.
+            prefs[Keys.ENTRIES] = entryAdapter.toJson(cache.entries)
+            prefs[Keys.START_ENTRIES] = entryAdapter.toJson(cache.prayerStartEntries)
             
             // Save toggles
             prefs[Keys.FAJR_TOGGLE] = cache.prayerToggles[Prayer.FAJR.name] ?: true
@@ -192,14 +205,14 @@ class NotificationScheduleCacheRepository(private val context: Context) {
             prefs[Keys.ISHA_TOGGLE] = cache.prayerToggles[Prayer.ISHA.name] ?: true
             
             // Save notification times (0 means not scheduled)
-            val entryMap = cache.entries.associateBy { it.prayerName }
+            val entryMap = cache.entries.sortedByDescending { it.notificationTimeMillis }.associateBy { it.prayerName }
             prefs[Keys.FAJR_NOTIFICATION_TIME] = entryMap[Prayer.FAJR.name]?.notificationTimeMillis ?: 0L
             prefs[Keys.DHUHR_NOTIFICATION_TIME] = entryMap[Prayer.DHUHR.name]?.notificationTimeMillis ?: 0L
             prefs[Keys.ASR_NOTIFICATION_TIME] = entryMap[Prayer.ASR.name]?.notificationTimeMillis ?: 0L
             prefs[Keys.MAGHRIB_NOTIFICATION_TIME] = entryMap[Prayer.MAGHRIB.name]?.notificationTimeMillis ?: 0L
             prefs[Keys.ISHA_NOTIFICATION_TIME] = entryMap[Prayer.ISHA.name]?.notificationTimeMillis ?: 0L
 
-            val startMap = cache.prayerStartEntries.associateBy { it.prayerName }
+            val startMap = cache.prayerStartEntries.sortedByDescending { it.notificationTimeMillis }.associateBy { it.prayerName }
             prefs[Keys.FAJR_START_TIME] = startMap[Prayer.FAJR.name]?.notificationTimeMillis ?: 0L
             prefs[Keys.DHUHR_START_TIME] = startMap[Prayer.DHUHR.name]?.notificationTimeMillis ?: 0L
             prefs[Keys.ASR_START_TIME] = startMap[Prayer.ASR.name]?.notificationTimeMillis ?: 0L
@@ -212,7 +225,7 @@ class NotificationScheduleCacheRepository(private val context: Context) {
      * Clear the schedule cache.
      */
     suspend fun clearCache() {
-        context.notificationScheduleDataStore.edit { it.clear() }
+        dataStore.edit { it.clear() }
     }
 }
 

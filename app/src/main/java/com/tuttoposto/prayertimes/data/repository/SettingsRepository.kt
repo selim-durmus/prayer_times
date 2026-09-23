@@ -9,6 +9,9 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.tuttoposto.prayertimes.data.models.AppSettings
+import com.tuttoposto.prayertimes.data.models.FajrWakeUpSettings
+import com.tuttoposto.prayertimes.data.models.FajrWakeSkip
+import com.tuttoposto.prayertimes.data.models.ReminderSound
 import com.tuttoposto.prayertimes.data.models.NotificationStyle
 import com.tuttoposto.prayertimes.data.models.PrayerEzanPreferences
 import com.tuttoposto.prayertimes.data.models.PrayerNotificationPreferences
@@ -24,7 +27,8 @@ private val Context.settingsDataStore: DataStore<Preferences> by preferencesData
  * Repository for managing app settings.
  * Uses DataStore for persistence.
  */
-class SettingsRepository(private val context: Context) {
+class SettingsRepository internal constructor(private val dataStore: DataStore<Preferences>) {
+    constructor(context: Context) : this(context.settingsDataStore)
 
     private fun parseNotificationStyle(raw: String): NotificationStyle? {
         return try {
@@ -36,6 +40,13 @@ class SettingsRepository(private val context: Context) {
     
     private object Keys {
         val GLOBAL_NOTIFICATIONS_ENABLED = booleanPreferencesKey("global_notifications_enabled")
+        val FAJR_WAKE_ENABLED = booleanPreferencesKey("fajr_wake_enabled")
+        val FAJR_WAKE_MINUTES = intPreferencesKey("fajr_wake_minutes")
+        val FAJR_WAKE_SOUND = stringPreferencesKey("fajr_wake_sound")
+        val FAJR_WAKE_STYLE = stringPreferencesKey("fajr_wake_style")
+        val FAJR_WAKE_START = booleanPreferencesKey("fajr_wake_start")
+        val FAJR_SKIP_DATE = stringPreferencesKey("fajr_skip_date")
+        val FAJR_SKIP_ZONE = stringPreferencesKey("fajr_skip_zone")
         val REMINDER_OFFSET_MINUTES = intPreferencesKey("reminder_offset_minutes")
         /** Legacy single style; used when [NOTIFICATION_STYLE_END] / [NOTIFICATION_STYLE_START] are absent. */
         val NOTIFICATION_STYLE = stringPreferencesKey("notification_style")
@@ -66,7 +77,7 @@ class SettingsRepository(private val context: Context) {
      * Flow of current app settings.
      * Emits default values for any missing preferences.
      */
-    val settingsFlow: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
+    val settingsFlow: Flow<AppSettings> = dataStore.data.map { prefs ->
         val legacyStyle = prefs[Keys.NOTIFICATION_STYLE]?.let { parseNotificationStyle(it) }
         val endStyle = prefs[Keys.NOTIFICATION_STYLE_END]?.let { parseNotificationStyle(it) }
             ?: legacyStyle
@@ -77,6 +88,15 @@ class SettingsRepository(private val context: Context) {
         // Seed per-prayer Ezan defaults from the legacy global toggle so existing users keep their choice.
         val legacyEzan = prefs[Keys.USE_EZAN_FOR_PRAYER_START] ?: true
         AppSettings(
+            fajrWakeSkip = FajrWakeSkip.fromStored(prefs[Keys.FAJR_SKIP_DATE], prefs[Keys.FAJR_SKIP_ZONE]),
+            fajrWakeUp = FajrWakeUpSettings(
+                enabled = prefs[Keys.FAJR_WAKE_ENABLED] ?: false,
+                minutesBeforeSunrise = (prefs[Keys.FAJR_WAKE_MINUTES] ?: 15).coerceIn(com.tuttoposto.prayertimes.data.models.FajrReminderTiming.storageRange),
+                sound = prefs[Keys.FAJR_WAKE_SOUND]?.let { raw -> ReminderSound.entries.find { it.name == raw } }
+                    ?: ReminderSound.ALARM,
+                style = prefs[Keys.FAJR_WAKE_STYLE]?.let(::parseNotificationStyle) ?: NotificationStyle.ALARMY,
+                notifyAtStart = prefs[Keys.FAJR_WAKE_START] ?: false
+            ),
             globalNotificationsEnabled = prefs[Keys.GLOBAL_NOTIFICATIONS_ENABLED] ?: true,
             prayerNotificationPreferences = PrayerNotificationPreferences(
                 fajr = prefs[Keys.FAJR_ENABLED] ?: true,
@@ -107,12 +127,31 @@ class SettingsRepository(private val context: Context) {
     suspend fun getSettings(): AppSettings {
         return settingsFlow.first()
     }
+
+    suspend fun setFajrWakeEnabled(enabled: Boolean) = dataStore.edit { it[Keys.FAJR_WAKE_ENABLED] = enabled }
+    suspend fun setFajrWakeMinutes(minutes: Int) {
+        require(minutes in com.tuttoposto.prayertimes.data.models.FajrReminderTiming.storageRange)
+        dataStore.edit { it[Keys.FAJR_WAKE_MINUTES] = minutes }
+    }
+    suspend fun setFajrWakeSound(sound: ReminderSound) = dataStore.edit { it[Keys.FAJR_WAKE_SOUND] = sound.name }
+    suspend fun setFajrWakeStyle(style: NotificationStyle) = dataStore.edit { it[Keys.FAJR_WAKE_STYLE] = style.name }
+    suspend fun setFajrWakeStart(enabled: Boolean) = dataStore.edit { it[Keys.FAJR_WAKE_START] = enabled }
+
+    suspend fun setFajrWakeSkip(skip: FajrWakeSkip?) = dataStore.edit {
+        if (skip == null) {
+            it.remove(Keys.FAJR_SKIP_DATE)
+            it.remove(Keys.FAJR_SKIP_ZONE)
+        } else {
+            it[Keys.FAJR_SKIP_DATE] = skip.date.toString()
+            it[Keys.FAJR_SKIP_ZONE] = skip.timezoneId
+        }
+    }
     
     /**
      * Update global notifications enabled state.
      */
     suspend fun setGlobalNotificationsEnabled(enabled: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.GLOBAL_NOTIFICATIONS_ENABLED] = enabled
         }
     }
@@ -123,19 +162,19 @@ class SettingsRepository(private val context: Context) {
      */
     suspend fun setReminderOffset(minutes: Int) {
         require(minutes in 30..60) { "Offset must be between 30 and 60 minutes" }
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.REMINDER_OFFSET_MINUTES] = minutes
         }
     }
     
     suspend fun setNotificationStyleEndReminder(style: NotificationStyle) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.NOTIFICATION_STYLE_END] = style.name
         }
     }
 
     suspend fun setNotificationStylePrayerStart(style: NotificationStyle) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.NOTIFICATION_STYLE_START] = style.name
         }
     }
@@ -144,7 +183,7 @@ class SettingsRepository(private val context: Context) {
      * Update individual prayer notification toggle.
      */
     suspend fun setPrayerEnabled(prayerName: String, enabled: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             when (prayerName.uppercase()) {
                 "FAJR" -> prefs[Keys.FAJR_ENABLED] = enabled
                 "DHUHR" -> prefs[Keys.DHUHR_ENABLED] = enabled
@@ -159,7 +198,7 @@ class SettingsRepository(private val context: Context) {
      * Update all prayer notification preferences at once.
      */
     suspend fun setPrayerNotificationPreferences(prefs: PrayerNotificationPreferences) {
-        context.settingsDataStore.edit { dataStorePrefs ->
+        dataStore.edit { dataStorePrefs ->
             dataStorePrefs[Keys.FAJR_ENABLED] = prefs.fajr
             dataStorePrefs[Keys.DHUHR_ENABLED] = prefs.dhuhr
             dataStorePrefs[Keys.ASR_ENABLED] = prefs.asr
@@ -172,19 +211,19 @@ class SettingsRepository(private val context: Context) {
      * Toggle debug mode (hidden developer section in Settings).
      */
     suspend fun setDebugModeEnabled(enabled: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.DEBUG_MODE_ENABLED] = enabled
         }
     }
     
     suspend fun setUseAmoledTheme(enabled: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.USE_AMOLED_THEME] = enabled
         }
     }
 
     suspend fun setNotifyOnPrayerStart(enabled: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             prefs[Keys.NOTIFY_ON_PRAYER_START] = enabled
         }
     }
@@ -193,7 +232,7 @@ class SettingsRepository(private val context: Context) {
      * Update the per-prayer Ezan (adhan) toggle for the prayer-start alert.
      */
     suspend fun setPrayerEzanEnabled(prayerName: String, enabled: Boolean) {
-        context.settingsDataStore.edit { prefs ->
+        dataStore.edit { prefs ->
             when (prayerName.uppercase()) {
                 "FAJR" -> prefs[Keys.FAJR_EZAN] = enabled
                 "DHUHR" -> prefs[Keys.DHUHR_EZAN] = enabled
@@ -208,7 +247,7 @@ class SettingsRepository(private val context: Context) {
      * Reset all settings to defaults.
      */
     suspend fun resetToDefaults() {
-        context.settingsDataStore.edit { it.clear() }
+        dataStore.edit { it.clear() }
     }
 }
 

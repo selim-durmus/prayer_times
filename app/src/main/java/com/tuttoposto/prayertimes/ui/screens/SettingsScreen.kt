@@ -1,12 +1,9 @@
 package com.tuttoposto.prayertimes.ui.screens
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
-import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -36,6 +33,11 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -55,6 +57,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tuttoposto.prayertimes.data.models.NotificationEventType
 import com.tuttoposto.prayertimes.data.models.NotificationLogEntry
 import com.tuttoposto.prayertimes.data.models.NotificationStyle
+import com.tuttoposto.prayertimes.data.models.ReminderSound
 import com.tuttoposto.prayertimes.R
 import com.tuttoposto.prayertimes.data.models.SyncLogEntry
 import com.tuttoposto.prayertimes.data.models.SyncSource
@@ -81,6 +84,17 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val previewRunning by viewModel.previewRunning.collectAsState()
+    val previewMessage by viewModel.previewMessage.collectAsState()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, viewModel) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                viewModel.refreshReadiness()
+                delay(5_000)
+            }
+        }
+    }
     
     Column(
         modifier = Modifier
@@ -137,6 +151,25 @@ fun SettingsScreen(
             onPrayerEzanToggle = viewModel::setPrayerEzanEnabled
         )
         
+        Spacer(modifier = Modifier.height(16.dp))
+
+        FajrWakeUpSection(
+            state = uiState,
+            onPrayerEnabled = { viewModel.setPrayerEnabled("FAJR", it) },
+            onStartEzan = { viewModel.setPrayerEzanEnabled("FAJR", it) },
+            onEnabled = { viewModel.setFajrWakeEnabled(it) },
+            onMinutes = { viewModel.setFajrWakeMinutes(it) },
+            onSound = { viewModel.setFajrWakeSound(it) },
+            onStyle = { viewModel.setFajrWakeStyle(it) },
+            onStart = { viewModel.setFajrWakeStart(it) },
+            previewRunning = previewRunning,
+            previewMessage = previewMessage,
+            onTest = viewModel::testFajrReminder,
+            onStopTest = viewModel::stopFajrPreview,
+            onSkip = { viewModel.skipFajrWakeUp(uiState.fajrSkipTarget) },
+            onUndoSkip = { viewModel.undoFajrSkip(uiState.fajrSkippedOccurrence) }
+        )
+
         Spacer(modifier = Modifier.height(16.dp))
         
         // Display Section (always visible)
@@ -227,6 +260,8 @@ private fun NotificationsSection(
             onCheckedChange = onGlobalToggle
         )
         
+        AlarmReadinessSection(state.readinessChecks)
+
         if (state.globalNotificationsEnabled) {
             HorizontalDivider(
                 color = PrayerTimesColors.divider,
@@ -250,14 +285,23 @@ private fun NotificationsSection(
                 )
             }
 
-            PrayerNotificationRow(
-                title = "Fajr",
-                enabled = state.fajrEnabled,
-                onEnabledChange = { onPrayerToggle("FAJR", it) },
-                showEzan = state.notifyOnPrayerStart,
-                ezanEnabled = state.fajrEzan,
-                onEzanChange = { onPrayerEzanToggle("FAJR", it) }
-            )
+            if (state.fajrWakeUp.enabled) {
+                Text(
+                    text = "Fajr notifications are configured in their own section below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            } else {
+                PrayerNotificationRow(
+                    title = "Fajr",
+                    enabled = state.fajrEnabled,
+                    onEnabledChange = { onPrayerToggle("FAJR", it) },
+                    showEzan = state.notifyOnPrayerStart,
+                    ezanEnabled = state.fajrEzan,
+                    onEzanChange = { onPrayerEzanToggle("FAJR", it) }
+                )
+            }
             PrayerNotificationRow(
                 title = "Dhuhr",
                 enabled = state.dhuhrEnabled,
@@ -313,6 +357,13 @@ private fun NotificationsSection(
                 currentValue = state.reminderOffsetMinutes,
                 onValueChange = onOffsetChange
             )
+            if (state.fajrWakeUp.enabled) {
+                Text(
+                    text = "Fajr uses its separate wake-up settings below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             
             HorizontalDivider(
                 color = PrayerTimesColors.divider,
@@ -339,8 +390,6 @@ private fun NotificationsSection(
                 modifier = Modifier.padding(vertical = 12.dp)
             )
             
-            // Permissions status
-            PermissionsStatusSection()
             
             HorizontalDivider(
                 color = PrayerTimesColors.divider,
@@ -354,103 +403,156 @@ private fun NotificationsSection(
 }
 
 @Composable
-private fun PermissionsStatusSection() {
+private fun FajrWakeUpSection(
+    state: SettingsUiState,
+    onPrayerEnabled: (Boolean) -> Unit,
+    onStartEzan: (Boolean) -> Unit,
+    onEnabled: (Boolean) -> Unit,
+    onMinutes: (Int) -> Unit,
+    onSound: (ReminderSound) -> Unit,
+    onStyle: (NotificationStyle) -> Unit,
+    onStart: (Boolean) -> Unit,
+    previewRunning: Boolean,
+    previewMessage: String?,
+    onTest: () -> Unit,
+    onStopTest: () -> Unit,
+    onSkip: () -> Unit,
+    onUndoSkip: () -> Unit
+) {
+    val wake = state.fajrWakeUp
     val context = LocalContext.current
-    
-    val hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.POST_NOTIFICATIONS
-        ) == PackageManager.PERMISSION_GRANTED
-    } else {
-        true // Not required before Android 13
+    val fullScreen = wake.enabled && wake.style == NotificationStyle.ALARMY
+    val accessNeeded = state.readinessChecks.firstOrNull {
+        it.action == com.tuttoposto.prayertimes.notifications.ReadinessAction.FULL_SCREEN && it.needsAttention
     }
-
-    val hasLocationPermission = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.ACCESS_FINE_LOCATION
-    ) == PackageManager.PERMISSION_GRANTED
-
-    val hasFgsMediaPlayback = ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK
-    ) == PackageManager.PERMISSION_GRANTED
-    
-    Column {
-        Text(
-            text = "Permissions",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 8.dp)
+    SectionCard(title = "Fajr notifications") {
+        SettingsToggleRow(
+            title = "Use separate Fajr reminder",
+            subtitle = "Replaces Fajr’s shared before-end reminder.",
+            checked = wake.enabled,
+            onCheckedChange = onEnabled
         )
-        
-        // Notification permission
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "Notifications",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
+        if (wake.enabled) {
+            SettingsToggleRow(
+                title = "Enable Fajr notifications",
+                subtitle = "Controls all Fajr alerts, including the wake-up reminder.",
+                checked = state.fajrEnabled,
+                onCheckedChange = onPrayerEnabled
+            )
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = PrayerTimesColors.divider)
+            FajrMinutePicker(wake.minutesBeforeSunrise, state.nextFajrWindow, onMinutes)
+            FajrSkipControls(state, onSkip, onUndoSkip)
+            Text("Wake-up sound", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            // Full-width options remain readable at larger font sizes.
+            ReminderSound.entries.forEach { sound ->
+                StyleButton(
+                    text = when (sound) {
+                        ReminderSound.EZAN -> "Ezan"
+                        ReminderSound.ALARM -> "Alarm sound"
+                        ReminderSound.NOTIFICATION -> "Notification sound"
+                    },
+                    selected = wake.sound == sound,
+                    onClick = { onSound(sound) },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            NotificationStyleBlock(
+                title = "Wake-up alert style",
+                currentStyle = wake.style,
+                onStyleChange = onStyle
             )
             Text(
-                text = if (hasNotificationPermission) "✓ Granted" else "✗ Denied",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (hasNotificationPermission) 
-                    PrayerTimesColors.success 
-                else 
-                    MaterialTheme.colorScheme.error
+                text = "Alarm-like uses alarm volume and a Fajr-only lock-screen alarm with Stop. Normal uses notification volume and stays a notification.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp, bottom = 12.dp)
             )
-        }
-        
-        // Location permission
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "Location",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = if (hasLocationPermission) "✓ Granted" else "✗ Denied",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (hasLocationPermission) 
-                    PrayerTimesColors.success 
-                else 
-                    MaterialTheme.colorScheme.error
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = stringResource(R.string.permission_fgs_media_playback),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = if (hasFgsMediaPlayback) "✓ Granted" else "✗ Denied",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (hasFgsMediaPlayback) {
-                    PrayerTimesColors.success
-                } else {
-                    MaterialTheme.colorScheme.error
-                }
+            SettingsToggleRow(
+                title = "Also allow the Fajr start alert",
+                subtitle = "Optional extra alert when Fajr begins. Requires prayer-start alerts above.",
+                checked = wake.notifyAtStart,
+                onCheckedChange = onStart
             )
         }
-        
-        // Battery optimization disclaimer
+        if (!wake.enabled) {
+            Text(
+                text = "Fajr is in the prayer list above and uses the shared ${state.reminderOffsetMinutes}-minute reminder and style.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FajrSkipControls(state, onSkip, onUndoSkip)
+        }
+        if (wake.enabled && state.notifyOnPrayerStart && wake.notifyAtStart) {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = PrayerTimesColors.divider)
+            SettingsToggleRow(
+                title = "Ezan for Fajr start alert",
+                subtitle = "Only affects the alert when Fajr begins. The wake-up reminder uses its own sound.",
+                checked = state.fajrEzan,
+                onCheckedChange = onStartEzan
+            )
+        }
+        TextButton(
+            onClick = {
+                if (previewRunning) onStopTest()
+                else if (fullScreen && accessNeeded != null) openReadinessSettings(context, accessNeeded)
+                else onTest()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(when {
+            previewRunning -> "Stop test"
+            fullScreen && accessNeeded != null -> "Allow full-screen alarms to test"
+            fullScreen -> "Test my Fajr alarm (10 s)"
+            else -> "Test my Fajr reminder"
+        }) }
         Text(
-            text = "💡 For best results, disable battery optimization for this app in your device settings.",
+            text = previewMessage ?: if (fullScreen)
+                "Test starts after 10 seconds so you can lock your phone, then stops after 8 seconds. Android may show a banner while unlocked; tap it to open the alarm. Works even if app alerts are paused."
+                else "Plays your current Fajr sound and style now, even if alerts are paused. Stops after 8 seconds; real alarms take priority.",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 12.dp)
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (wake.enabled && (!state.globalNotificationsEnabled || !state.fajrEnabled)) {
+            Text(
+                text = "Fajr alerts are paused until both prayer notifications and Fajr notifications are enabled.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun FajrSkipControls(state: SettingsUiState, onSkip: () -> Unit, onUndo: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+        Text(
+            text = when {
+                !state.globalNotificationsEnabled -> "Paused: prayer notifications are off."
+                !state.fajrEnabled -> "Paused: Fajr notifications are off."
+                state.fajrNextWakeUp != null -> "Next wake-up: ${state.fajrNextWakeUp}"
+                else -> "No upcoming wake-up scheduled. Saved prayer times are required."
+            }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary
+        )
+        val skipped = state.fajrSkippedOccurrence
+        if (skipped != null) {
+            val today = java.time.LocalDate.now(java.time.ZoneId.of(skipped.timezoneId))
+            val date = skipped.date.format(java.time.format.DateTimeFormatter.ofPattern("EEE, MMM d"))
+            val label = if (skipped.date == today) "today ($date)" else date
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Wake-up skipped for $label", modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = onUndo, enabled = !state.fajrSkipBusy) { Text("Undo") }
+            }
+            Text("Only this wake-up is skipped. Prayer-start alerts stay unchanged.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else if (state.fajrSkipTarget != null) {
+            TextButton(onClick = onSkip, enabled = !state.fajrSkipBusy) { Text("Skip next Fajr wake-up") }
+        }
+        state.fajrSkipError?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
     }
 }
 

@@ -27,13 +27,12 @@ class PrayerTimesApplication : Application() {
         NotificationHelper.createNotificationChannels(this)
         
         // Schedule midnight sync alarm for daily prayer times refresh
-        // This ensures we fetch fresh times at 00:05 each day
-        // Critical for not missing Fajr notifications
+        // Restores tomorrow's schedule locally even when the API is unreachable.
         val notificationScheduler = NotificationScheduler(this)
         notificationScheduler.scheduleMidnightSyncAlarm()
         
         // Enqueue periodic sync work as a fallback
-        // Uses KEEP policy so existing work isn't replaced
+        // UPDATE removes legacy network constraints while retaining periodic cadence.
         // This serves as backup if midnight alarm is missed
         PrayerTimesSyncWorker.enqueue(this)
     }

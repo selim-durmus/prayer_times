@@ -9,6 +9,20 @@ enum class NotificationStyle {
     ALARMY
 }
 
+enum class ReminderSound { EZAN, ALARM, NOTIFICATION }
+
+data class FajrWakeUpSettings(
+    val enabled: Boolean = false,
+    val minutesBeforeSunrise: Int = 15,
+    val sound: ReminderSound = ReminderSound.ALARM,
+    val style: NotificationStyle = NotificationStyle.ALARMY,
+    val notifyAtStart: Boolean = false
+) {
+    init { require(minutesBeforeSunrise in FajrReminderTiming.storageRange) }
+}
+
+data class ReminderAlert(val style: NotificationStyle, val sound: ReminderSound)
+
 /**
  * Per-prayer notification toggle preferences.
  * Each prayer can be individually enabled/disabled for notifications.
@@ -112,8 +126,21 @@ data class AppSettings(
     val notifyOnPrayerStart: Boolean = false,
     val prayerEzanPreferences: PrayerEzanPreferences = PrayerEzanPreferences(),
     val debugModeEnabled: Boolean = false, // Hidden by default
-    val useAmoledTheme: Boolean = false
+    val useAmoledTheme: Boolean = false,
+    val fajrWakeUp: FajrWakeUpSettings = FajrWakeUpSettings(),
+    val fajrWakeSkip: FajrWakeSkip? = null
 ) {
+    fun reminderOffsetFor(prayer: Prayer): Int =
+        if (prayer == Prayer.FAJR && fajrWakeUp.enabled) fajrWakeUp.minutesBeforeSunrise else reminderOffsetMinutes
+
+    fun reminderAlertFor(prayer: Prayer): ReminderAlert =
+        if (prayer == Prayer.FAJR && fajrWakeUp.enabled) ReminderAlert(fajrWakeUp.style, fajrWakeUp.sound)
+        else ReminderAlert(notificationStyleEndReminder,
+            if (notificationStyleEndReminder == NotificationStyle.ALARMY) ReminderSound.ALARM else ReminderSound.NOTIFICATION)
+
+    fun shouldNotifyAtStart(prayer: Prayer): Boolean =
+        notifyOnPrayerStart && (prayer != Prayer.FAJR || !fajrWakeUp.enabled || fajrWakeUp.notifyAtStart)
+
     init {
         require(reminderOffsetMinutes in 30..60) {
             "Reminder offset must be between 30 and 60 minutes"

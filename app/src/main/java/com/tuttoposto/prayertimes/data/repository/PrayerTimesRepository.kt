@@ -14,10 +14,17 @@ import com.tuttoposto.prayertimes.data.api.NetworkModule
 import com.tuttoposto.prayertimes.data.models.Prayer
 import com.tuttoposto.prayertimes.data.models.PrayerTime
 import com.tuttoposto.prayertimes.data.models.PrayerTimesCache
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.time.YearMonth
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
@@ -37,12 +44,18 @@ private val Context.prayerTimesDataStore: DataStore<Preferences> by preferencesD
  * - Validate cache based on date and timezone
  * - Convert API response to domain models
  */
-class PrayerTimesRepository(private val context: Context) {
+class PrayerTimesRepository internal constructor(
+    private val dataStore: DataStore<Preferences>,
+    private val api: AladhanApi
+) {
+    constructor(context: Context) : this(context.prayerTimesDataStore, NetworkModule.aladhanApi)
+    companion object { private val refreshMutex = Mutex() }
+
     
-    private val api: AladhanApi = NetworkModule.aladhanApi
     
     // DataStore keys for caching
     private object Keys {
+        val DAYS = stringPreferencesKey("cached_days_v2")
         val DATE = stringPreferencesKey("cached_date")
         val TIMEZONE = stringPreferencesKey("cached_timezone")
         val LATITUDE = doublePreferencesKey("cached_latitude")
@@ -68,41 +81,41 @@ class PrayerTimesRepository(private val context: Context) {
      * Flow of cached prayer times.
      * Emits null if cache is empty or invalid.
      */
-    val prayerTimesCacheFlow: Flow<PrayerTimesCache?> = context.prayerTimesDataStore.data.map { prefs ->
-        val dateStr = prefs[Keys.DATE] ?: return@map null
-        val timezone = prefs[Keys.TIMEZONE] ?: return@map null
-        val latitude = prefs[Keys.LATITUDE] ?: return@map null
-        val longitude = prefs[Keys.LONGITUDE] ?: return@map null
+    private fun readLegacy(prefs: Preferences): PrayerTimesCache? {
+        val dateStr = prefs[Keys.DATE] ?: return null
+        val timezone = prefs[Keys.TIMEZONE] ?: return null
+        val latitude = prefs[Keys.LATITUDE] ?: return null
+        val longitude = prefs[Keys.LONGITUDE] ?: return null
         
         val prayers = listOf(
             PrayerTime(
                 name = Prayer.FAJR.displayName,
-                startTimeMillis = prefs[Keys.FAJR_START] ?: return@map null,
-                endTimeMillis = prefs[Keys.FAJR_END] ?: return@map null
+                startTimeMillis = prefs[Keys.FAJR_START] ?: return null,
+                endTimeMillis = prefs[Keys.FAJR_END] ?: return null
             ),
             PrayerTime(
                 name = Prayer.DHUHR.displayName,
-                startTimeMillis = prefs[Keys.DHUHR_START] ?: return@map null,
-                endTimeMillis = prefs[Keys.DHUHR_END] ?: return@map null
+                startTimeMillis = prefs[Keys.DHUHR_START] ?: return null,
+                endTimeMillis = prefs[Keys.DHUHR_END] ?: return null
             ),
             PrayerTime(
                 name = Prayer.ASR.displayName,
-                startTimeMillis = prefs[Keys.ASR_START] ?: return@map null,
-                endTimeMillis = prefs[Keys.ASR_END] ?: return@map null
+                startTimeMillis = prefs[Keys.ASR_START] ?: return null,
+                endTimeMillis = prefs[Keys.ASR_END] ?: return null
             ),
             PrayerTime(
                 name = Prayer.MAGHRIB.displayName,
-                startTimeMillis = prefs[Keys.MAGHRIB_START] ?: return@map null,
-                endTimeMillis = prefs[Keys.MAGHRIB_END] ?: return@map null
+                startTimeMillis = prefs[Keys.MAGHRIB_START] ?: return null,
+                endTimeMillis = prefs[Keys.MAGHRIB_END] ?: return null
             ),
             PrayerTime(
                 name = Prayer.ISHA.displayName,
-                startTimeMillis = prefs[Keys.ISHA_START] ?: return@map null,
-                endTimeMillis = prefs[Keys.ISHA_END] ?: return@map null
+                startTimeMillis = prefs[Keys.ISHA_START] ?: return null,
+                endTimeMillis = prefs[Keys.ISHA_END] ?: return null
             )
         )
         
-        PrayerTimesCache(
+        return PrayerTimesCache(
             date = LocalDate.parse(dateStr),
             timezoneId = timezone,
             latitude = latitude,
@@ -111,78 +124,116 @@ class PrayerTimesRepository(private val context: Context) {
             hijriDate = prefs[Keys.HIJRI_DATE]
         )
     }
-    
-    /**
-     * Get current cached prayer times (non-flow version).
-     */
-    suspend fun getCachedPrayerTimes(): PrayerTimesCache? {
-        return prayerTimesCacheFlow.first()
+
+    private fun readDays(prefs: Preferences): List<PrayerTimesCache> {
+        val json = prefs[Keys.DAYS]
+        if (json != null) {
+            try {
+                val days = PrayerCacheCodec.decode(json)
+                if (days.isNotEmpty()) return days
+            } catch (_: Exception) {
+                // Keep the legacy day usable if the new-format cache cannot be decoded.
+            }
+        }
+        return listOfNotNull(readLegacy(prefs))
     }
-    
-    /**
-     * Check if cache is valid for today and current timezone.
-     * 
-     * Cache is valid if:
-     * - Date matches today
-     * - Timezone matches current device timezone
-     */
-    suspend fun isCacheValid(): Boolean {
-        val cache = getCachedPrayerTimes() ?: return false
-        val today = LocalDate.now()
-        val currentTimezone = ZoneId.systemDefault().id
-        
-        return cache.date == today && cache.timezoneId == currentTimezone
+
+    private val sourceDaysFlow = dataStore.data.map(::readDays)
+
+    suspend fun getSavedMonth(month: YearMonth): List<PrayerTimesCache> =
+        sourceDaysFlow.first().filter { YearMonth.from(it.date) == month }.sortedBy { it.date }
+
+    // Re-evaluate the selected day while a screen is open, even without a DataStore write.
+    private val localDayFlow = flow {
+        while (true) {
+            val zone = ZoneId.systemDefault()
+            emit(LocalDate.now(zone) to zone)
+            delay(30_000)
+        }
+    }.distinctUntilChanged()
+
+    val prayerTimesCacheFlow: Flow<PrayerTimesCache?> =
+        combine(sourceDaysFlow, localDayFlow) { days, (date, zone) ->
+            PrayerCachePolicy.resolve(days, date, zone)
+        }
+
+    suspend fun getCachedPrayerTimes(
+        date: LocalDate = LocalDate.now(),
+        zone: ZoneId = ZoneId.systemDefault()
+    ): PrayerTimesCache? = PrayerCachePolicy.resolve(sourceDaysFlow.first(), date, zone)
+
+    suspend fun getSchedulingDays(): List<PrayerTimesCache> {
+        val zone = ZoneId.systemDefault()
+        val today = LocalDate.now(zone)
+        val days = sourceDaysFlow.first()
+        // Include yesterday's Isha if its end reminder is still in the future.
+        return (-1L..1L).mapNotNull { PrayerCachePolicy.resolve(days, today.plusDays(it), zone) }
     }
-    
+
+    suspend fun isCacheValid(): Boolean = getCachedPrayerTimes()?.isFallback == false
+
+    suspend fun needsRefresh(): Boolean =
+        PrayerCachePolicy.needsRefresh(sourceDaysFlow.first(), LocalDate.now(), ZoneId.systemDefault())
+
     /**
-     * Fetch prayer times from Aladhan API and update cache.
-     * 
-     * @param latitude Device latitude
-     * @param longitude Device longitude
-     * @return Result with PrayerTimesCache on success
+     * Download current and next month. Persist each successful month immediately, so a
+     * partial network failure cannot discard newly fetched days or the prior offline cache.
      */
     suspend fun fetchAndCachePrayerTimes(
         latitude: Double,
-        longitude: Double
-    ): Result<PrayerTimesCache> {
-        return try {
-            val now = Instant.now()
-            val zoneId = ZoneId.systemDefault()
-            val today = LocalDate.now(zoneId)
-            
-            // Aladhan API accepts Unix timestamp in seconds
-            val response = api.getTimings(
-                timestamp = now.epochSecond,
-                latitude = latitude,
-                longitude = longitude
-            )
-            
-            if (response.code != 200) {
-                return Result.failure(Exception("API error: ${response.status}"))
+        longitude: Double,
+        onCacheUpdated: suspend () -> Unit = {}
+    ): Result<PrayerTimesCache> = refreshMutex.withLock {
+        try {
+            val today = LocalDate.now()
+            val currentMonth = YearMonth.from(today)
+            for (month in listOf(currentMonth, currentMonth.plusMonths(1))) {
+                val response = api.getCalendar(month.year, month.monthValue, latitude, longitude)
+                check(response.code == 200) { "API error: ${response.status}" }
+                val fetchedAt = System.currentTimeMillis()
+                val days = response.data.map { data ->
+                    val gregorian = data.date.gregorian
+                    val date = LocalDate.of(gregorian.year.toInt(), gregorian.month.number, gregorian.day.toInt())
+                    check(YearMonth.from(date) == month) { "Unexpected calendar date: $date" }
+                    val zone = ZoneId.of(data.meta.timezone)
+                    val prayers = convertTimingsToPrayerTimes(data.timings, date, zone)
+                    check(prayers.all { it.endTimeMillis > it.startTimeMillis }) { "Invalid prayer window on $date" }
+                    PrayerTimesCache(
+                        date = date,
+                        timezoneId = zone.id,
+                        latitude = latitude,
+                        longitude = longitude,
+                        prayers = prayers,
+                        hijriDate = data.date.hijri?.formatted(),
+                        fetchedAtMillis = fetchedAt
+                    )
+                }
+                check(days.map { it.date }.toSet().size == month.lengthOfMonth()) { "Incomplete calendar for $month" }
+                saveDays(days)
+                onCacheUpdated()
             }
-            
-            val timings = response.data.timings
-            val prayers = convertTimingsToPrayerTimes(timings, today, zoneId)
-            val hijriDate = response.data.date.hijri?.formatted()
-            
-            val cache = PrayerTimesCache(
-                date = today,
-                timezoneId = zoneId.id,
-                latitude = latitude,
-                longitude = longitude,
-                prayers = prayers,
-                hijriDate = hijriDate
-            )
-            
-            // Persist to DataStore
-            saveCacheToDataStore(cache)
-            
-            Result.success(cache)
+            Result.success(getCachedPrayerTimes() ?: error("No prayer times in response"))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
-    
+
+    private suspend fun saveDays(incoming: List<PrayerTimesCache>) {
+        dataStore.edit { prefs ->
+            val first = incoming.first()
+            // Never mix future days from two different locations.
+            val previous = readDays(prefs).filter {
+                it.latitude == first.latitude && it.longitude == first.longitude && it.timezoneId == first.timezoneId
+            }
+            val merged = (previous + incoming).associateBy { it.date }.values.sortedBy { it.date }
+            val oldest = LocalDate.now().withDayOfMonth(1).minusDays(1)
+            val retained = merged.filter { !it.date.isBefore(oldest) }.ifEmpty { listOf(merged.last()) }
+            prefs[Keys.DAYS] = PrayerCacheCodec.encode(retained)
+        }
+    }
+
     /**
      * Convert API timings to domain model PrayerTime list.
      * 
@@ -191,7 +242,7 @@ class PrayerTimesRepository(private val context: Context) {
      * - Dhuhr ends at Asr
      * - Asr ends at Maghrib
      * - Maghrib ends at Isha
-     * - Isha ends at Fajr of next day (we use midnight as approximation for simplicity in v1)
+     * - Isha ends at Islamic midnight, as in the existing app.
      */
     private fun convertTimingsToPrayerTimes(
         timings: AladhanTimings,
@@ -217,6 +268,11 @@ class PrayerTimesRepository(private val context: Context) {
         val maghribTime = parseTime(timings.maghrib)
         val ishaTime = parseTime(timings.isha)
         val midnightTime = parseTime(timings.midnight)
+        // Summer Isha can be after civil midnight; it still belongs to this prayer day.
+        val ishaDate = if (ishaTime.isBefore(maghribTime)) date.plusDays(1) else date
+        val ishaStart = toEpochMillis(ishaTime, ishaDate)
+        var midnightDate = ishaDate
+        if (toEpochMillis(midnightTime, midnightDate) <= ishaStart) midnightDate = midnightDate.plusDays(1)
         
         return listOf(
             PrayerTime(
@@ -237,55 +293,14 @@ class PrayerTimesRepository(private val context: Context) {
             PrayerTime(
                 name = Prayer.MAGHRIB.displayName,
                 startTimeMillis = toEpochMillis(maghribTime),
-                endTimeMillis = toEpochMillis(ishaTime)
+                endTimeMillis = ishaStart
             ),
             PrayerTime(
                 name = Prayer.ISHA.displayName,
-                startTimeMillis = toEpochMillis(ishaTime),
-                // Isha ends at midnight (Islamic midnight, provided by API)
-                // If midnight is before Isha (next day's midnight), add a day
-                endTimeMillis = if (midnightTime.isBefore(ishaTime)) {
-                    toEpochMillis(midnightTime, date.plusDays(1))
-                } else {
-                    toEpochMillis(midnightTime)
-                }
+                startTimeMillis = ishaStart,
+                endTimeMillis = toEpochMillis(midnightTime, midnightDate)
             )
         )
-    }
-    
-    private suspend fun saveCacheToDataStore(cache: PrayerTimesCache) {
-        context.prayerTimesDataStore.edit { prefs ->
-            prefs[Keys.DATE] = cache.date.toString()
-            prefs[Keys.TIMEZONE] = cache.timezoneId
-            prefs[Keys.LATITUDE] = cache.latitude
-            prefs[Keys.LONGITUDE] = cache.longitude
-            cache.hijriDate?.let { prefs[Keys.HIJRI_DATE] = it }
-            
-            cache.prayers.forEach { prayer ->
-                when (prayer.name) {
-                    Prayer.FAJR.displayName -> {
-                        prefs[Keys.FAJR_START] = prayer.startTimeMillis
-                        prefs[Keys.FAJR_END] = prayer.endTimeMillis
-                    }
-                    Prayer.DHUHR.displayName -> {
-                        prefs[Keys.DHUHR_START] = prayer.startTimeMillis
-                        prefs[Keys.DHUHR_END] = prayer.endTimeMillis
-                    }
-                    Prayer.ASR.displayName -> {
-                        prefs[Keys.ASR_START] = prayer.startTimeMillis
-                        prefs[Keys.ASR_END] = prayer.endTimeMillis
-                    }
-                    Prayer.MAGHRIB.displayName -> {
-                        prefs[Keys.MAGHRIB_START] = prayer.startTimeMillis
-                        prefs[Keys.MAGHRIB_END] = prayer.endTimeMillis
-                    }
-                    Prayer.ISHA.displayName -> {
-                        prefs[Keys.ISHA_START] = prayer.startTimeMillis
-                        prefs[Keys.ISHA_END] = prayer.endTimeMillis
-                    }
-                }
-            }
-        }
     }
     
     /**
@@ -293,7 +308,7 @@ class PrayerTimesRepository(private val context: Context) {
      * Useful for forcing a refresh.
      */
     suspend fun clearCache() {
-        context.prayerTimesDataStore.edit { it.clear() }
+        dataStore.edit { it.clear() }
     }
 }
 

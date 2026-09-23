@@ -22,8 +22,14 @@ data class PrayerTimesCache(
     val latitude: Double,       // Location used for calculation
     val longitude: Double,
     val prayers: List<PrayerTime>,
-    val hijriDate: String? = null // e.g. "10 Ramadan 1447"
+    val hijriDate: String? = null, // e.g. "10 Ramadan 1447"
+    val sourceDate: LocalDate = date,
+    val sourceTimezoneId: String = timezoneId,
+    val fetchedAtMillis: Long = 0,
+    val cachedThrough: LocalDate = date
 ) {
+    val isFallback: Boolean get() = sourceDate != date || sourceTimezoneId != timezoneId
+
     companion object {
         val EMPTY = PrayerTimesCache(
             date = LocalDate.MIN,

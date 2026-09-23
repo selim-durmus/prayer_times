@@ -65,8 +65,8 @@ class NotificationReceiver : BroadcastReceiver() {
                 val settings = settingsRepository.getSettings()
 
                 val prayer = Prayer.fromName(prayerName)
-                if (!settings.globalNotificationsEnabled || !settings.notifyOnPrayerStart ||
-                    prayer == null || !settings.prayerNotificationPreferences.isEnabled(prayer)
+                if (!settings.globalNotificationsEnabled ||
+                    prayer == null || !settings.shouldNotifyAtStart(prayer) || !settings.prayerNotificationPreferences.isEnabled(prayer)
                 ) {
                     notificationLogRepository.logEvent(
                         NotificationEventType.SKIPPED,
@@ -120,13 +120,25 @@ class NotificationReceiver : BroadcastReceiver() {
                 val settingsRepository = SettingsRepository(context)
                 val settings = settingsRepository.getSettings()
                 
-                // Double-check that notifications are still enabled
-                if (settings.globalNotificationsEnabled) {
+                // Recheck skip at delivery too, in case this broadcast was already queued when cancelled.
+                val prayer = Prayer.fromName(prayerName)
+                val zone = intent.getStringExtra(NotificationScheduler.EXTRA_PRAYER_ZONE) ?: java.time.ZoneId.systemDefault().id
+                val date = intent.getStringExtra(NotificationScheduler.EXTRA_PRAYER_DATE)?.let(java.time.LocalDate::parse)
+                    ?: java.time.Instant.ofEpochMilli(intent.getLongExtra(NotificationScheduler.EXTRA_PRAYER_END,
+                        System.currentTimeMillis())).atZone(java.time.ZoneId.of(zone)).toLocalDate()
+                val skipped = settings.fajrWakeSkip?.matches(prayer, date, zone) == true
+                if (settings.globalNotificationsEnabled && prayer != null &&
+                    settings.prayerNotificationPreferences.isEnabled(prayer) && !skipped) {
+                    val alert = settings.reminderAlertFor(prayer)
                     NotificationHelper.showPrayerNotification(
                         context = context,
                         prayerName = prayerName,
                         minutesRemaining = minutesRemaining,
-                        style = settings.notificationStyleEndReminder
+                        style = alert.style,
+                        sound = alert.sound,
+                        isFajrWakeUp = prayer == Prayer.FAJR && settings.fajrWakeUp.enabled,
+                        prayerEndTimeMillis = intent.getLongExtra(NotificationScheduler.EXTRA_PRAYER_END,
+                            System.currentTimeMillis() + minutesRemaining * 60_000L)
                     )
                     Log.d(TAG, "✅ Notification SHOWN for $prayerName")
                 } else {
@@ -134,7 +146,8 @@ class NotificationReceiver : BroadcastReceiver() {
                     notificationLogRepository.logEvent(
                         NotificationEventType.SKIPPED,
                         prayerName,
-                        "Global notifications disabled at fire time"
+                        if (skipped) "Fajr wake-up skipped for $date ($zone)"
+                        else "Notifications disabled globally or for this prayer at fire time"
                     )
                 }
             } catch (e: Exception) {

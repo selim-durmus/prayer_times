@@ -16,6 +16,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.tuttoposto.prayertimes.R
 import com.tuttoposto.prayertimes.data.models.NotificationStyle
+import com.tuttoposto.prayertimes.data.models.ReminderSound
 import com.tuttoposto.prayertimes.data.models.Prayer
 import com.tuttoposto.prayertimes.ui.MainActivity
 
@@ -39,6 +40,22 @@ object NotificationHelper {
     const val CHANNEL_PRAYER_START_ADHAN = "prayer_has_begun_adhan"
     /** Ongoing notification for [PrayerAlarmPlaybackService]; silent (audio is explicit Ringtone). */
     const val CHANNEL_ALARM_PLAYBACK = "alarm_playback_control"
+    private fun fajrWakeChannel(sound: ReminderSound) = "fajr_wake_${sound.name.lowercase()}"
+
+    fun channelIdForReminder(isFajrWakeUp: Boolean, sound: ReminderSound, style: NotificationStyle): String = when {
+        style == NotificationStyle.ALARMY -> CHANNEL_ALARM_PLAYBACK
+        isFajrWakeUp -> fajrWakeChannel(sound)
+        else -> CHANNEL_PRAYER_REMINDERS
+    }
+
+    const val NOTIFICATION_ID_FAJR_PREVIEW = 9987
+    const val PREVIEW_DURATION_MS = 8_000L
+
+    private fun reminderSoundUri(context: Context, sound: ReminderSound): Uri = when (sound) {
+        ReminderSound.EZAN -> ezanSoundUri(context) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        ReminderSound.ALARM -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        ReminderSound.NOTIFICATION -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+    }
 
     /** Base name for raw resource: res/raw/ezan.ogg or ezan.mp3 */
     private const val EZAN_RAW_NAME = "ezan"
@@ -180,6 +197,21 @@ object NotificationHelper {
             setSound(adhanUri, notificationSoundAttrs())
         }
         notificationManager.createNotificationChannel(startAdhan)
+        // Channel sounds are immutable after creation: each wake-up sound has its own channel.
+        for (sound in ReminderSound.entries) {
+            val label = when (sound) {
+                ReminderSound.EZAN -> "Ezan"
+                ReminderSound.ALARM -> "Alarm sound"
+                ReminderSound.NOTIFICATION -> "Notification sound"
+            }
+            notificationManager.createNotificationChannel(NotificationChannel(
+                fajrWakeChannel(sound), "Fajr wake-up · $label", NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Fajr reminder before sunrise"
+                enableVibration(true)
+                setSound(reminderSoundUri(context, sound), notificationSoundAttrs())
+            })
+        }
     }
 
     /** Alarm-like end reminders do not use a notification channel (foreground playback). */
@@ -209,7 +241,11 @@ object NotificationHelper {
         context: Context,
         prayerName: String,
         minutesRemaining: Int,
-        style: NotificationStyle
+        style: NotificationStyle,
+        sound: ReminderSound = if (style == NotificationStyle.ALARMY) ReminderSound.ALARM else ReminderSound.NOTIFICATION,
+        isFajrWakeUp: Boolean = false,
+        isPreview: Boolean = false,
+        prayerEndTimeMillis: Long = System.currentTimeMillis() + minutesRemaining * 60_000L
     ) {
         if (!hasNotificationPermission(context)) {
             return
@@ -218,12 +254,17 @@ object NotificationHelper {
         val displayName = Prayer.fromName(prayerName)?.displayName ?: prayerName
 
         if (style == NotificationStyle.ALARMY) {
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            val uri = reminderSoundUri(context, sound)
             PrayerAlarmPlaybackService.startPlayback(
                 context,
                 uri,
-                displayName,
-                context.getString(R.string.notification_reminder_alarm_playback, minutesRemaining)
+                if (isPreview) "Fajr reminder · Test" else if (isFajrWakeUp) "Fajr wake-up" else displayName,
+                if (isPreview) "Sound preview · Stops after 8 seconds · Swipe to stop"
+                else if (isFajrWakeUp) "$minutesRemaining minutes until sunrise · Swipe to stop"
+                else context.getString(R.string.notification_reminder_alarm_playback, minutesRemaining),
+                isPreview = isPreview,
+                showFajrScreen = FajrAlarmPresentation.usesAlarmScreen(Prayer.fromName(prayerName), isFajrWakeUp, style),
+                sunriseMillis = prayerEndTimeMillis
             )
             return
         }
@@ -239,20 +280,27 @@ object NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val channelId = channelIdForEndReminder()
+        val channelId = channelIdForReminder(isFajrWakeUp, sound, style)
 
         val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(displayName)
-            .setContentText("$minutesRemaining minutes remaining")
+            .setContentTitle(if (isPreview) "Fajr reminder · Test" else if (isFajrWakeUp) "Fajr wake-up" else displayName)
+            .setContentText(if (isPreview) "Sound preview — your scheduled reminders are unchanged"
+                else if (isFajrWakeUp) "$minutesRemaining minutes until sunrise" else "$minutesRemaining minutes remaining")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
+            .apply { if (isPreview) setTimeoutAfter(PREVIEW_DURATION_MS) }
             .build()
 
-        val notificationId = getNotificationIdForPrayer(prayerName)
+        val notificationId = if (isPreview) NOTIFICATION_ID_FAJR_PREVIEW else getNotificationIdForPrayer(prayerName)
         NotificationManagerCompat.from(context).notify(notificationId, notification)
+    }
+
+    fun stopFajrPreview(context: Context) {
+        cancelNotification(context, NOTIFICATION_ID_FAJR_PREVIEW)
+        PrayerAlarmPlaybackService.stopPreview(context)
     }
     
     /**

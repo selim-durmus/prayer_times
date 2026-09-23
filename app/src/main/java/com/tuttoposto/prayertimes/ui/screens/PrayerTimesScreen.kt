@@ -109,7 +109,8 @@ fun PrayerTimesScreen(
                         prayers = state.prayers,
                         lastUpdated = state.lastUpdated,
                         locationName = state.locationName,
-                        hijriDate = state.hijriDate
+                        hijriDate = state.hijriDate,
+                        fallbackMessage = state.fallbackMessage
                     )
                 }
             }
@@ -195,7 +196,8 @@ private fun SuccessContent(
     prayers: List<PrayerTimeDisplay>,
     lastUpdated: String,
     locationName: String,
-    hijriDate: String? = null
+    hijriDate: String? = null,
+    fallbackMessage: String? = null
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
@@ -243,6 +245,16 @@ private fun SuccessContent(
             modifier = Modifier.padding(bottom = 20.dp)
         )
         
+        if (fallbackMessage != null) {
+            Text(
+                text = fallbackMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
+
         // Pull hint (subtle)
         Text(
             text = "Pull down to refresh",

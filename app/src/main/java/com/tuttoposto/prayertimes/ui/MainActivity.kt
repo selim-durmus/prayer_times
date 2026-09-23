@@ -38,11 +38,9 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.flow.map
@@ -57,9 +55,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.tuttoposto.prayertimes.data.repository.NotificationScheduleCacheRepository
-import com.tuttoposto.prayertimes.data.repository.PrayerTimesRepository
 import com.tuttoposto.prayertimes.data.repository.SettingsRepository
+import com.tuttoposto.prayertimes.notifications.PrayerScheduleCoordinator
 import com.tuttoposto.prayertimes.notifications.NotificationScheduler
 import com.tuttoposto.prayertimes.ui.screens.MonthlyCalendarScreen
 import com.tuttoposto.prayertimes.ui.screens.PrayerTimesScreen
@@ -68,11 +65,7 @@ import com.tuttoposto.prayertimes.ui.screens.SettingsScreen
 import com.tuttoposto.prayertimes.ui.screens.TasbihatScreen
 import com.tuttoposto.prayertimes.ui.theme.PrayerTimesTheme
 import com.tuttoposto.prayertimes.workers.PrayerTimesSyncWorker
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 
 /**
  * MainActivity - Entry point for the app.
@@ -94,10 +87,7 @@ class MainActivity : ComponentActivity() {
         private const val TAG = "MainActivity"
     }
     
-    private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private lateinit var prayerTimesRepository: PrayerTimesRepository
     private lateinit var settingsRepository: SettingsRepository
-    private lateinit var scheduleCacheRepository: NotificationScheduleCacheRepository
     private lateinit var notificationScheduler: NotificationScheduler
     
     // Permission state
@@ -152,16 +142,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         
         // Initialize dependencies
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-        prayerTimesRepository = PrayerTimesRepository(this)
         settingsRepository = SettingsRepository(this)
-        scheduleCacheRepository = NotificationScheduleCacheRepository(this)
         notificationScheduler = NotificationScheduler(this)
         
         // Enqueue periodic sync work
         PrayerTimesSyncWorker.enqueue(this)
         
-        // Request permissions
+        // Restore saved alarms even before location permission is granted.
+        fetchPrayerTimesAndSchedule()
         requestPermissions()
         
         setContent {
@@ -243,91 +231,16 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun fetchPrayerTimesAndSchedule() {
+        PrayerTimesSyncWorker.enqueueImmediate(this)
         lifecycleScope.launch {
             try {
-                // Check if cache is valid first
-                if (prayerTimesRepository.isCacheValid()) {
-                    Log.d(TAG, "Using cached prayer times")
-                    scheduleNotifications()
-                    return@launch
-                }
-                
-                // Get current location
-                val location = getCurrentLocation()
-                if (location == null) {
-                    Log.w(TAG, "Could not get location")
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Could not determine location. Please ensure GPS is enabled.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    return@launch
-                }
-                
-                Log.d(TAG, "Fetching prayer times for location: ${location.first}, ${location.second}")
-                
-                // Fetch prayer times
-                val result = prayerTimesRepository.fetchAndCachePrayerTimes(
-                    latitude = location.first,
-                    longitude = location.second
-                )
-                
-                if (result.isSuccess) {
-                    Log.d(TAG, "Prayer times fetched successfully")
-                    scheduleNotifications()
-                } else {
-                    Log.e(TAG, "Failed to fetch prayer times", result.exceptionOrNull())
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Failed to fetch prayer times. Please check your internet connection.",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
+                PrayerScheduleCoordinator(this@MainActivity).scheduleFromCache()
             } catch (e: Exception) {
-                Log.e(TAG, "Error in fetchPrayerTimesAndSchedule", e)
+                Log.e(TAG, "Could not restore cached alarms", e)
             }
         }
     }
-    
-    private suspend fun getCurrentLocation(): Pair<Double, Double>? {
-        return try {
-            // Try last known location first
-            val lastLocation = try {
-                fusedLocationClient.lastLocation.await()
-            } catch (e: SecurityException) {
-                null
-            }
-            
-            if (lastLocation != null) {
-                return Pair(lastLocation.latitude, lastLocation.longitude)
-            }
-            
-            // Request current location
-            val currentLocation = fusedLocationClient.getCurrentLocation(
-                Priority.PRIORITY_BALANCED_POWER_ACCURACY,
-                null
-            ).await()
-            
-            currentLocation?.let { Pair(it.latitude, it.longitude) }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting location", e)
-            null
-        }
-    }
-    
-    private suspend fun scheduleNotifications() {
-        val prayerCache = prayerTimesRepository.getCachedPrayerTimes() ?: return
-        val settings = settingsRepository.getSettings()
-        
-        // Use SIMPLE approach - no cancel/reschedule complexity
-        val newCache = notificationScheduler.scheduleAllNotificationsSimple(
-            prayerTimesCache = prayerCache,
-            settings = settings
-        )
-        
-        scheduleCacheRepository.saveScheduleCache(newCache)
-        Log.d(TAG, "Notifications scheduled (SIMPLE): ${newCache.entries.size} active")
-    }
+
 }
 
 /**

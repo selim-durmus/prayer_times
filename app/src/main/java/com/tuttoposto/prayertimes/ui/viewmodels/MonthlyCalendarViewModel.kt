@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -43,6 +46,23 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
         }
 
         viewModelScope.launch {
+            val savedDays = repository.getSavedMonth(yearMonth)
+            val saved = savedDays.takeIf { it.size == yearMonth.lengthOfMonth() }?.map { day ->
+                fun time(name: String): String = day.prayers.first { it.name == name }.let {
+                    Instant.ofEpochMilli(it.startTimeMillis).atZone(ZoneId.of(day.timezoneId))
+                        .format(DateTimeFormatter.ofPattern("HH:mm"))
+                }
+                DayPrayerTimes(
+                    day.date.dayOfMonth, day.date.format(DateTimeFormatter.ofPattern("d MMM")),
+                    day.hijriDate, time("Fajr"), time("Dhuhr"), time("Asr"), time("Maghrib"), time("Isha"),
+                    day.date == LocalDate.now()
+                )
+            }
+            if (saved != null && !forceRefresh) {
+                monthCache[yearMonth] = saved
+                _uiState.value = MonthlyCalendarUiState.Success(saved)
+                return@launch
+            }
             _uiState.value = MonthlyCalendarUiState.Loading
 
             val location = getLocation()
@@ -83,7 +103,8 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
                 Log.d(TAG, "Fetched and cached ${days.size} days for $yearMonth")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch calendar", e)
-                _uiState.value = MonthlyCalendarUiState.Error("Failed to load: ${e.message}")
+                _uiState.value = (saved ?: cached)?.let { MonthlyCalendarUiState.Success(it) }
+                    ?: MonthlyCalendarUiState.Error("Failed to load: ${e.message}")
             }
         }
     }

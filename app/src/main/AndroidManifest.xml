@@ -21,6 +21,7 @@
         Reference: https://developer.android.com/develop/background-work/services/alarms/schedule
     -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     
     <!-- Wake lock for ensuring device wakes for notifications -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -94,13 +95,16 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
         
         <!-- 
             Midnight sync receiver for daily prayer times refresh.
-            Triggered at 00:05 each day to fetch fresh prayer times for the new day.
-            Ensures morning prayers (Fajr) are never missed due to stale data.
+            Restores locally cached/fallback alarms at midnight; refresh is separate work.
         -->
         <receiver
             android:name=".notifications.MidnightSyncReceiver"
@@ -147,6 +151,18 @@
             android:name=".notifications.PrayerAlarmPlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <activity
+            android:name=".ui.FajrAlarmActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.tuttoposto.prayertimes.fajr_alarm"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.PrayerTimes" />
+
+        <receiver android:name=".notifications.FajrPreviewReceiver" android:exported="false" />
 
         <receiver
             android:name=".notifications.PrayerAlarmDismissReceiver"

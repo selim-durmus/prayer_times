@@ -1,6 +1,8 @@
 package com.tuttoposto.prayertimes.notifications
 
 import android.app.Notification
+import android.app.NotificationManager
+import android.app.ActivityOptions
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -21,6 +23,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.tuttoposto.prayertimes.R
 import com.tuttoposto.prayertimes.ui.MainActivity
+import com.tuttoposto.prayertimes.ui.FajrAlarmActivity
 
 /**
  * Foreground service for [NotificationStyle.ALARMY]: plays alarm-stream audio until the user
@@ -33,10 +36,22 @@ class PrayerAlarmPlaybackService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
     private var isForeground = false
+    private val session = PlaybackSession()
+    private var showFajrScreen = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_SESSION) {
+            if (session.canStop(intent.getStringExtra(FajrAlarmActivity.EXTRA_TOKEN))) shutdown()
+            else if (!session.active) stopSelf()
+            return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_STOP_PREVIEW) {
+            if (session.stopPreview()) shutdown()
+            else if (!session.active) stopSelf()
+            return START_NOT_STICKY
+        }
         if (intent?.action == ACTION_STOP) {
             shutdown()
             return START_NOT_STICKY
@@ -49,6 +64,12 @@ class PrayerAlarmPlaybackService : Service() {
         }
         val title = intent.getStringExtra(EXTRA_TITLE) ?: getString(R.string.app_name)
         val text = intent.getStringExtra(EXTRA_TEXT) ?: ""
+        val preview = intent.getBooleanExtra(EXTRA_PREVIEW, false)
+        if (!session.start(preview)) return START_NOT_STICKY
+        showFajrScreen = intent.getBooleanExtra(EXTRA_FAJR_SCREEN, false)
+        FajrAlarmScreenState.publish(if (showFajrScreen) FajrAlarmScreenSession(
+            requireNotNull(session.token), intent.getLongExtra(EXTRA_SUNRISE, 0), preview
+        ) else null)
 
         cancelTimeout()
         releaseWakeLock()
@@ -68,13 +89,14 @@ class PrayerAlarmPlaybackService : Service() {
             isForeground = true
         } catch (e: Exception) {
             Log.e(TAG, "startForeground failed", e)
+            FajrAlarmScreenState.publish(null)
             stopSelf()
             return START_NOT_STICKY
         }
 
         acquireWakeLock()
         val uri = Uri.parse(uriString)
-        mainHandler.post {
+        run {
             try {
                 ringtone?.stop()
             } catch (_: Exception) {
@@ -97,12 +119,24 @@ class PrayerAlarmPlaybackService : Service() {
         }
 
         timeoutRunnable = Runnable { shutdown() }
-        mainHandler.postDelayed(timeoutRunnable!!, MAX_PLAYBACK_MS)
+        mainHandler.postDelayed(timeoutRunnable!!, if (preview) NotificationHelper.PREVIEW_DURATION_MS else MAX_PLAYBACK_MS)
         return START_NOT_STICKY
     }
 
     private fun buildForegroundNotification(title: String, text: String): Notification {
-        val openApp = PendingIntent.getActivity(
+        val token = requireNotNull(session.token)
+        val openApp = if (showFajrScreen) PendingIntent.getActivity(
+            this, 5002,
+            Intent(this, FajrAlarmActivity::class.java).apply {
+                data = Uri.parse("prayertimes://fajr-alarm/$token")
+                putExtra(FajrAlarmActivity.EXTRA_TOKEN, token)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            // Scoped to the private alarm activity and handed only to Android's notification UI.
+            ActivityOptions.makeBasic().setPendingIntentCreatorBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
+            ).toBundle()
+        ) else PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java).apply {
@@ -110,6 +144,13 @@ class PrayerAlarmPlaybackService : Service() {
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+
+        val stopFajr = if (showFajrScreen) PendingIntent.getBroadcast(this, 5003,
+            Intent(this, PrayerAlarmDismissReceiver::class.java).apply {
+                data = Uri.parse("prayertimes://stop-fajr/$token")
+                putExtra(FajrAlarmActivity.EXTRA_TOKEN, token)
+            }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        ) else null
 
         return NotificationCompat.Builder(this, NotificationHelper.CHANNEL_ALARM_PLAYBACK)
             .setSmallIcon(R.drawable.ic_notification)
@@ -119,11 +160,22 @@ class PrayerAlarmPlaybackService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setContentIntent(openApp)
+            .apply {
+                if (showFajrScreen) {
+                    setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    addAction(0, "Stop", stopFajr)
+                    if (getSystemService(NotificationManager::class.java).canUseFullScreenIntent()) {
+                        setFullScreenIntent(openApp, true)
+                    }
+                }
+            }
             .setDeleteIntent(
-                PendingIntent.getBroadcast(
+                stopFajr ?: PendingIntent.getBroadcast(
                     this,
-                    3,
-                    Intent(this, PrayerAlarmDismissReceiver::class.java),
+                    if (session.preview) 4 else 3,
+                    Intent(this, PrayerAlarmDismissReceiver::class.java).apply {
+                        putExtra(PrayerAlarmDismissReceiver.EXTRA_PREVIEW, session.preview)
+                    },
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
             )
@@ -152,9 +204,11 @@ class PrayerAlarmPlaybackService : Service() {
     }
 
     private fun shutdown() {
+        FajrAlarmScreenState.publish(null)
+        session.clear()
         cancelTimeout()
         releaseWakeLock()
-        mainHandler.post {
+        run {
             try {
                 ringtone?.stop()
             } catch (_: Exception) {
@@ -169,6 +223,8 @@ class PrayerAlarmPlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        FajrAlarmScreenState.publish(null)
+        session.clear()
         cancelTimeout()
         releaseWakeLock()
         try {
@@ -182,13 +238,19 @@ class PrayerAlarmPlaybackService : Service() {
     companion object {
         private const val TAG = "PrayerAlarmPlayback"
         const val ACTION_STOP = "com.tuttoposto.prayertimes.alarm_playback.STOP"
+        private const val ACTION_STOP_SESSION = "com.tuttoposto.prayertimes.alarm_playback.STOP_SESSION"
+        private const val EXTRA_FAJR_SCREEN = "fajr_screen"
+        private const val EXTRA_SUNRISE = "sunrise_millis"
+        private const val ACTION_STOP_PREVIEW = "com.tuttoposto.prayertimes.alarm_playback.STOP_PREVIEW"
+        private const val EXTRA_PREVIEW = "preview"
         private const val EXTRA_SOUND_URI = "sound_uri"
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_TEXT = "text"
         const val PLAYBACK_NOTIFICATION_ID = 5001
         private const val MAX_PLAYBACK_MS = 20 * 60 * 1000L
 
-        fun startPlayback(context: Context, soundUri: Uri, title: String, text: String) {
+        fun startPlayback(context: Context, soundUri: Uri, title: String, text: String, isPreview: Boolean = false,
+                          showFajrScreen: Boolean = false, sunriseMillis: Long = 0) {
             val app = context.applicationContext
             if (!NotificationHelper.hasNotificationPermission(app)) {
                 Log.w(TAG, "No notification permission, skip alarm playback")
@@ -198,6 +260,9 @@ class PrayerAlarmPlaybackService : Service() {
                 putExtra(EXTRA_SOUND_URI, soundUri.toString())
                 putExtra(EXTRA_TITLE, title)
                 putExtra(EXTRA_TEXT, text)
+                putExtra(EXTRA_PREVIEW, isPreview)
+                putExtra(EXTRA_FAJR_SCREEN, showFajrScreen)
+                putExtra(EXTRA_SUNRISE, sunriseMillis)
             }
             ContextCompat.startForegroundService(app, intent)
         }
@@ -206,6 +271,17 @@ class PrayerAlarmPlaybackService : Service() {
             val app = context.applicationContext
             val i = Intent(app, PrayerAlarmPlaybackService::class.java).apply { action = ACTION_STOP }
             app.startService(i)
+        }
+
+        fun stopPreview(context: Context) {
+            context.startService(Intent(context, PrayerAlarmPlaybackService::class.java).apply { action = ACTION_STOP_PREVIEW })
+        }
+
+        fun stopSession(context: Context, token: String) {
+            context.startService(Intent(context, PrayerAlarmPlaybackService::class.java).apply {
+                action = ACTION_STOP_SESSION
+                putExtra(FajrAlarmActivity.EXTRA_TOKEN, token)
+            })
         }
     }
 }

@@ -9,7 +9,13 @@ import android.content.Intent
  * cleanly to a running [Service]; a short broadcast reliably stops [PrayerAlarmPlaybackService].
  */
 class PrayerAlarmDismissReceiver : BroadcastReceiver() {
+    companion object { const val EXTRA_PREVIEW = "dismiss_preview" }
+
     override fun onReceive(context: Context, intent: Intent?) {
-        PrayerAlarmPlaybackService.requestStop(context.applicationContext)
+        val token = intent?.getStringExtra(com.tuttoposto.prayertimes.ui.FajrAlarmActivity.EXTRA_TOKEN)
+        if (token != null) PrayerAlarmPlaybackService.stopSession(context.applicationContext, token)
+        else if (intent?.getBooleanExtra(EXTRA_PREVIEW, false) == true)
+            PrayerAlarmPlaybackService.stopPreview(context.applicationContext)
+        else PrayerAlarmPlaybackService.requestStop(context.applicationContext)
     }
 }

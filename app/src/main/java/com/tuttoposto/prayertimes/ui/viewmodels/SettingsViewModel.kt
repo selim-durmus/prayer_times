@@ -1,13 +1,17 @@
 package com.tuttoposto.prayertimes.ui.viewmodels
 
-import android.Manifest
 import android.app.Application
-import android.content.pm.PackageManager
 import android.util.Log
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tuttoposto.prayertimes.data.models.AppSettings
+import com.tuttoposto.prayertimes.data.models.FajrWakeUpSettings
+import com.tuttoposto.prayertimes.data.models.FajrWakeSkip
+import com.tuttoposto.prayertimes.notifications.PrayerAlarmPlan
+import com.tuttoposto.prayertimes.notifications.PlannedPrayerAlarm
+import com.tuttoposto.prayertimes.data.models.FajrReminderTiming
+import com.tuttoposto.prayertimes.data.models.PrayerTime
+import com.tuttoposto.prayertimes.data.models.ReminderSound
 import com.tuttoposto.prayertimes.data.models.NotificationLogCache
 import com.tuttoposto.prayertimes.data.models.NotificationLogEntry
 import com.tuttoposto.prayertimes.data.models.NotificationScheduleCache
@@ -22,15 +26,21 @@ import com.tuttoposto.prayertimes.data.repository.NotificationScheduleCacheRepos
 import com.tuttoposto.prayertimes.data.repository.PrayerTimesRepository
 import com.tuttoposto.prayertimes.data.repository.SettingsRepository
 import com.tuttoposto.prayertimes.data.repository.SyncLogRepository
+import com.tuttoposto.prayertimes.notifications.PrayerScheduleCoordinator
 import com.tuttoposto.prayertimes.notifications.NotificationScheduler
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
+import com.tuttoposto.prayertimes.notifications.NotificationHelper
+import com.tuttoposto.prayertimes.notifications.FajrAlarmPresentation
+import com.tuttoposto.prayertimes.notifications.FajrPreviewAlarm
+import com.tuttoposto.prayertimes.notifications.AlarmReadiness
+import com.tuttoposto.prayertimes.notifications.ReadinessCheck
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -58,10 +68,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val syncLogRepository = SyncLogRepository(application)
     private val notificationLogRepository = NotificationLogRepository(application)
     private val notificationScheduler = NotificationScheduler(application)
-    private val fusedLocationClient = LocationServices.getFusedLocationProviderClient(application)
     
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
+    private val _previewRunning = MutableStateFlow(false)
+    val previewRunning = _previewRunning.asStateFlow()
+    private val _previewMessage = MutableStateFlow<String?>(null)
+    val previewMessage = _previewMessage.asStateFlow()
+    private var previewJob: Job? = null
     
     init {
         observeData()
@@ -84,7 +98,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
     
-    private fun buildUiState(
+    private suspend fun buildUiState(
         settings: AppSettings,
         prayerCache: PrayerTimesCache?,
         scheduleCache: NotificationScheduleCache,
@@ -94,6 +108,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         val zoneId = ZoneId.systemDefault()
         val nowMillis = System.currentTimeMillis()
+        val schedulingDays = prayerTimesRepository.getSchedulingDays()
+        val nextWake = PrayerAlarmPlan.nextFajrReminder(schedulingDays, settings, nowMillis)
+        val nextFajrWindow = schedulingDays
+            .filterNot { settings.fajrWakeSkip?.matches(Prayer.FAJR, it.date, it.timezoneId) == true }
+            .flatMap { it.prayers }.filter { Prayer.fromName(it.name) == Prayer.FAJR &&
+                FajrReminderTiming.atMillis(it, settings.fajrWakeUp.minutesBeforeSunrise) > nowMillis }
+            .minByOrNull { it.startTimeMillis }
         
         // Build prayer times display
         val prayerTimesDisplay = prayerCache?.prayers?.map { prayer ->
@@ -129,25 +150,27 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                     status = "Disabled"
                 )
             } else {
-                val entry = scheduleCache.entries.find { it.prayerName == prayer.name }
-                val startEntry = scheduleCache.prayerStartEntries.find { it.prayerName == prayer.name }
+                val entry = scheduleCache.entries.filter { it.prayerName == prayer.name && it.notificationTimeMillis > nowMillis }
+                    .minByOrNull { it.notificationTimeMillis }
+                val startEntry = scheduleCache.prayerStartEntries.filter { it.prayerName == prayer.name && it.notificationTimeMillis > nowMillis }
+                    .minByOrNull { it.notificationTimeMillis }
 
                 val parts = mutableListOf<String>()
                 if (entry != null && entry.notificationTimeMillis > nowMillis) {
                     val t = LocalDateTime.ofInstant(
                         Instant.ofEpochMilli(entry.notificationTimeMillis),
                         zoneId
-                    ).format(timeFormatter)
+                    ).format(DateTimeFormatter.ofPattern("MMM d, HH:mm"))
                     parts.add("End reminder $t")
                 }
-                if (settings.notifyOnPrayerStart &&
+                if (settings.shouldNotifyAtStart(prayer) &&
                     startEntry != null &&
                     startEntry.notificationTimeMillis > nowMillis
                 ) {
                     val t = LocalDateTime.ofInstant(
                         Instant.ofEpochMilli(startEntry.notificationTimeMillis),
                         zoneId
-                    ).format(timeFormatter)
+                    ).format(DateTimeFormatter.ofPattern("MMM d, HH:mm"))
                     parts.add("Start $t")
                 }
 
@@ -176,7 +199,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         // Calculate next midnight sync time if not already cached
         val nextMidnightSync = syncLog.formatNextMidnightSync() ?: run {
             val now = ZonedDateTime.now(zoneId)
-            var nextSync = now.toLocalDate().atTime(0, 5).atZone(zoneId)
+            var nextSync = now.toLocalDate().atStartOfDay(zoneId)
             if (now.isAfter(nextSync)) {
                 nextSync = nextSync.plusDays(1)
             }
@@ -184,6 +207,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
         
         return SettingsUiState(
+            fajrWakeUp = settings.fajrWakeUp,
+            nextFajrWindow = nextFajrWindow,
+            readinessChecks = AlarmReadiness.read(getApplication(), settings, prayerCache != null),
+            fajrNextWakeUp = formatFajrWake(nextWake),
+            fajrSkipTarget = nextWake?.let { FajrWakeSkip(it.prayerDate, it.timezoneId) },
+            fajrSkippedOccurrence = settings.fajrWakeSkip?.takeIf { it.isCurrent(nowMillis) },
+            fajrSkipBusy = _uiState.value.fajrSkipBusy,
+            fajrSkipError = _uiState.value.fajrSkipError,
             globalNotificationsEnabled = settings.globalNotificationsEnabled,
             fajrEnabled = settings.prayerNotificationPreferences.fajr,
             dhuhrEnabled = settings.prayerNotificationPreferences.dhuhr,
@@ -245,6 +276,147 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             settingsRepository.setReminderOffset(minutes.coerceIn(30, 60))
             rescheduleNotifications()
         }
+    }
+
+    fun setFajrWakeEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setFajrWakeEnabled(enabled)
+        rescheduleNotifications()
+    }
+    fun setFajrWakeMinutes(minutes: Int) = viewModelScope.launch {
+        val range = FajrReminderTiming.selectionRange(_uiState.value.nextFajrWindow) ?: return@launch
+        settingsRepository.setFajrWakeMinutes(minutes.coerceIn(range))
+        rescheduleNotifications()
+    }
+    fun setFajrWakeSound(sound: ReminderSound) = viewModelScope.launch {
+        settingsRepository.setFajrWakeSound(sound)
+    }
+    fun setFajrWakeStyle(style: NotificationStyle) = viewModelScope.launch {
+        settingsRepository.setFajrWakeStyle(style)
+    }
+    fun setFajrWakeStart(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setFajrWakeStart(enabled)
+        rescheduleNotifications()
+    }
+
+    /** Read-only refresh when returning from Android settings, and while Settings is visible. */
+    suspend fun refreshReadiness() {
+        val settings = settingsRepository.getSettings()
+        val cache = prayerTimesRepository.getCachedPrayerTimes()
+        val now = System.currentTimeMillis()
+        val days = prayerTimesRepository.getSchedulingDays()
+        val nextWindow = days.filterNot { settings.fajrWakeSkip?.matches(Prayer.FAJR, it.date, it.timezoneId) == true }
+            .flatMap { it.prayers }
+            .filter { Prayer.fromName(it.name) == Prayer.FAJR && FajrReminderTiming.atMillis(it, settings.fajrWakeUp.minutesBeforeSunrise) > now }
+            .minByOrNull { it.startTimeMillis }
+        val nextWake = PrayerAlarmPlan.nextFajrReminder(days, settings, now)
+        _uiState.value = _uiState.value.copy(
+            readinessChecks = AlarmReadiness.read(getApplication(), settings, cache != null),
+            nextFajrWindow = nextWindow, fajrNextWakeUp = formatFajrWake(nextWake),
+            fajrSkipTarget = nextWake?.let { FajrWakeSkip(it.prayerDate, it.timezoneId) },
+            fajrSkippedOccurrence = settings.fajrWakeSkip?.takeIf { it.isCurrent(now) }
+        )
+    }
+
+    private fun formatFajrWake(alarm: PlannedPrayerAlarm?): String? = alarm?.let {
+        Instant.ofEpochMilli(it.atMillis).atZone(ZoneId.systemDefault())
+            .format(DateTimeFormatter.ofPattern("EEE, MMM d · HH:mm"))
+    }
+
+    fun skipFajrWakeUp(expected: FajrWakeSkip?) {
+        if (expected == null || _uiState.value.fajrSkipBusy) return
+        _uiState.value = _uiState.value.copy(fajrSkipBusy = true, fajrSkipError = null)
+        viewModelScope.launch {
+            try {
+                val settings = settingsRepository.getSettings()
+                val now = System.currentTimeMillis()
+                // Do not advance a second tap (or a stale screen) to tomorrow's occurrence.
+                if (settings.fajrWakeSkip?.isCurrent(now) == true) return@launch
+                val next = PrayerAlarmPlan.nextFajrReminder(prayerTimesRepository.getSchedulingDays(), settings, now)
+                if (next == null || !expected.matches(next.prayer, next.prayerDate, next.timezoneId)) {
+                    _uiState.value = _uiState.value.copy(fajrSkipError = "The next wake-up changed. Review its time and try again.")
+                    return@launch
+                }
+                settingsRepository.setFajrWakeSkip(expected)
+                rescheduleNotifications()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                Log.w(TAG, "Could not update Fajr skip", e)
+                _uiState.value = _uiState.value.copy(fajrSkipError = "Could not finish updating the skip. Please try again.")
+            } finally {
+                _uiState.value = _uiState.value.copy(fajrSkipBusy = false)
+                refreshReadiness()
+            }
+        }
+    }
+
+    fun undoFajrSkip(expected: FajrWakeSkip?) {
+        if (expected == null || _uiState.value.fajrSkipBusy) return
+        _uiState.value = _uiState.value.copy(fajrSkipBusy = true, fajrSkipError = null)
+        viewModelScope.launch {
+            try {
+                if (settingsRepository.getSettings().fajrWakeSkip != expected) return@launch
+                settingsRepository.setFajrWakeSkip(null)
+                // Past alarms are never replayed; Undo restores only a still-upcoming occurrence.
+                rescheduleNotifications()
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                Log.w(TAG, "Could not undo Fajr skip", e)
+                _uiState.value = _uiState.value.copy(fajrSkipError = "Could not finish undoing the skip. Please try again.")
+            } finally {
+                _uiState.value = _uiState.value.copy(fajrSkipBusy = false)
+                refreshReadiness()
+            }
+        }
+    }
+
+    fun testFajrReminder() {
+        if (_previewRunning.value) return
+        _previewRunning.value = true
+        _previewMessage.value = null
+        previewJob = viewModelScope.launch {
+            try {
+                val settings = settingsRepository.getSettings()
+                if (!NotificationHelper.hasNotificationPermission(getApplication()) ||
+                    !androidx.core.app.NotificationManagerCompat.from(getApplication()).areNotificationsEnabled()) {
+                    _previewMessage.value = "Allow notifications in Alarm readiness before testing."
+                    return@launch
+                }
+                val alert = settings.reminderAlertFor(Prayer.FAJR)
+                if (FajrAlarmPresentation.usesAlarmScreen(Prayer.FAJR, settings.fajrWakeUp.enabled, alert.style)) {
+                    if (!notificationScheduler.canScheduleExactAlarms()) {
+                        _previewMessage.value = "Allow exact alarms in Alarm readiness before testing the lock screen."
+                        return@launch
+                    }
+                    FajrPreviewAlarm.schedule(getApplication())
+                    _previewMessage.value = "Test in 10 seconds — lock your phone now. Rings for 8 seconds. If unlocked, tap the alarm notification to open its screen."
+                    delay(FajrPreviewAlarm.DELAY_MS)
+                } else {
+                    NotificationHelper.showPrayerNotification(
+                        getApplication(), Prayer.FAJR.name, settings.reminderOffsetFor(Prayer.FAJR),
+                        alert.style, alert.sound, settings.fajrWakeUp.enabled, isPreview = true
+                    )
+                    _previewMessage.value = "Testing current sound and style for 8 seconds. This does not test scheduled delivery."
+                }
+                delay(NotificationHelper.PREVIEW_DURATION_MS)
+                _previewMessage.value = "Preview finished. If you heard nothing, review Alarm readiness."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _previewMessage.value = "Could not preview sound. Check Alarm readiness and try again."
+                Log.w(TAG, "Fajr preview failed", e)
+            } finally {
+                // Each delivery path has its own timeout; no background service is started here.
+                _previewRunning.value = false
+            }
+        }
+    }
+
+    fun stopFajrPreview() {
+        previewJob?.cancel()
+        FajrPreviewAlarm.cancel(getApplication())
+        NotificationHelper.stopFajrPreview(getApplication())
+        _previewRunning.value = false
+        _previewMessage.value = null
     }
     
     fun setNotificationStyleEndReminder(style: NotificationStyle) {
@@ -343,106 +515,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      * Perform sync operation - fetch prayer times and reschedule notifications.
      */
     private suspend fun performSync(source: SyncSource) {
-        val context = getApplication<Application>()
-        
-        // Get location
-        val location = getLocation()
-        if (location == null) {
-            val errorMsg = "Could not get location"
-            Log.w(TAG, errorMsg)
-            syncLogRepository.logSyncAttempt(source, false, errorMsg)
-            return
-        }
-        
-        Log.d(TAG, "Syncing with location: ${location.first}, ${location.second}")
-        
-        // Fetch prayer times
-        val result = prayerTimesRepository.fetchAndCachePrayerTimes(
-            latitude = location.first,
-            longitude = location.second
-        )
-        
-        if (result.isFailure) {
-            val errorMsg = "API fetch failed: ${result.exceptionOrNull()?.message}"
-            Log.e(TAG, errorMsg, result.exceptionOrNull())
-            syncLogRepository.logSyncAttempt(source, false, errorMsg)
-            return
-        }
-        
-        val prayerTimesCache = result.getOrNull() ?: return
-        Log.d(TAG, "Successfully fetched prayer times for ${prayerTimesCache.date}")
-        
-        // Schedule notifications using SIMPLE approach (no cancel/reschedule complexity)
-        val settings = settingsRepository.getSettings()
-        
-        val newScheduleCache = notificationScheduler.scheduleAllNotificationsSimple(
-            prayerTimesCache = prayerTimesCache,
-            settings = settings
-        )
-        
-        scheduleCacheRepository.saveScheduleCache(newScheduleCache)
-        
-        syncLogRepository.logSyncAttempt(
-            source,
-            true,
-            "Fetched times for ${prayerTimesCache.date}",
-            newScheduleCache.entries.size
-        )
-        
-        Log.d(TAG, "Sync complete. Scheduled ${newScheduleCache.entries.size} notifications")
+        PrayerScheduleCoordinator(getApplication()).refresh(source, force = true)
     }
-    
-    private suspend fun getLocation(): Pair<Double, Double>? {
-        val context = getApplication<Application>()
-        
-        // Check permission
-        if (!hasLocationPermission(context)) {
-            Log.w(TAG, "No location permission")
-            // Try cached location
-            val cached = prayerTimesRepository.getCachedPrayerTimes()
-            return cached?.let { Pair(it.latitude, it.longitude) }
-        }
-        
-        return try {
-            // Try last known location
-            val lastLocation = try {
-                fusedLocationClient.lastLocation.await()
-            } catch (e: SecurityException) {
-                null
-            }
-            
-            if (lastLocation != null) {
-                return Pair(lastLocation.latitude, lastLocation.longitude)
-            }
-            
-            // Try current location
-            val currentLocation = fusedLocationClient.getCurrentLocation(
-                Priority.PRIORITY_HIGH_ACCURACY,
-                null
-            ).await()
-            
-            currentLocation?.let { Pair(it.latitude, it.longitude) }
-                ?: prayerTimesRepository.getCachedPrayerTimes()?.let { 
-                    Pair(it.latitude, it.longitude) 
-                }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting location", e)
-            // Fall back to cached location
-            prayerTimesRepository.getCachedPrayerTimes()?.let { 
-                Pair(it.latitude, it.longitude) 
-            }
-        }
-    }
-    
-    private fun hasLocationPermission(context: android.content.Context): Boolean {
-        return ContextCompat.checkSelfPermission(
-            context, Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED ||
-        ContextCompat.checkSelfPermission(
-            context, Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-    }
-    
+
     /**
      * Clear the notification log.
      */
@@ -457,22 +532,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      * Uses SIMPLE approach - no cancel/reschedule complexity.
      */
     private suspend fun rescheduleNotifications() {
-        val prayerCache = prayerTimesRepository.getCachedPrayerTimes()
-        if (prayerCache == null) {
-            Log.w(TAG, "No prayer times cached, cannot reschedule")
-            return
-        }
-        
-        val settings = settingsRepository.getSettings()
-        
-        val newCache = notificationScheduler.scheduleAllNotificationsSimple(
-            prayerTimesCache = prayerCache,
-            settings = settings
-        )
-        
-        scheduleCacheRepository.saveScheduleCache(newCache)
-        Log.d(TAG, "Rescheduled notifications (SIMPLE): ${newCache.entries.size} active")
+        PrayerScheduleCoordinator(getApplication()).scheduleFromCache()
     }
+
 }
 
 // Helper classes since Kotlin doesn't have Quadruple/Quintuple
@@ -495,6 +557,14 @@ private data class Quintuple<A, B, C, D, E>(
  * UI state for Settings screen
  */
 data class SettingsUiState(
+    val fajrWakeUp: FajrWakeUpSettings = FajrWakeUpSettings(),
+    val fajrNextWakeUp: String? = null,
+    val fajrSkipTarget: FajrWakeSkip? = null,
+    val fajrSkippedOccurrence: FajrWakeSkip? = null,
+    val fajrSkipBusy: Boolean = false,
+    val fajrSkipError: String? = null,
+    val nextFajrWindow: PrayerTime? = null,
+    val readinessChecks: List<ReadinessCheck> = emptyList(),
     // Settings
     val globalNotificationsEnabled: Boolean = true,
     val fajrEnabled: Boolean = true,

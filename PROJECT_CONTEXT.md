@@ -1,5 +1,20 @@
 # Prayer Times (PrayerTimesV2) — Project Context
 
+> September 2026 offline scheduling update: the sections below describe the original
+> architecture. The active repository now persists current/next-month source days in
+> `cached_days_v2` in the existing prayer DataStore, with legacy one-day read support.
+> `PrayerCachePolicy` selects the requested day or projects the most recent preceding
+> source day's clock times when missing, preserving source date/timezone and overnight
+> windows. Projected days are never persisted as fresh data. `PrayerScheduleCoordinator`
+> restores cached alarms before location/HTTP work; failed/partial refresh leaves those
+> alarms and source data usable. It schedules yesterday's overnight reminders plus today
+> and tomorrow using three date slots. Midnight/boot/time/zone/package/permission receivers
+> restore locally and enqueue the worker. Periodic work has no network constraint, using
+> UPDATE to migrate existing work. The main UI labels approximations and original download
+> time; widgets use the same resolver and mark fallback with ≈. Full saved months are
+> available offline in the calendar. Unit coverage is in `OfflinePrayerTimesTest`,
+> `PrayerTimesRepositoryTest`, and `NotificationSchedulePersistenceTest`.
+
 This document summarizes the **Prayer Times** Android application (`com.tuttoposto.prayertimes`): purpose, stack, architecture, file layout, data/UI layers, design choices, constraints, and dependency versions. It is intended to onboard a reader (or an AI session) with **no prior exposure** to the repo.
 
 ---

@@ -28,12 +28,11 @@ import java.time.format.DateTimeFormatter
  * - Uses setAlarmClock() for reliable notification delivery
  * - No complex cancel-then-reschedule logic (was causing race conditions)
  * - PendingIntent.FLAG_UPDATE_CURRENT handles updates automatically
- * - Fixed notification IDs per prayer prevent duplicates (max 5 alarms at any time)
+ * - Date slots keep today and tomorrow independently scheduled
  * 
  * Why setAlarmClock() instead of setExactAndAllowWhileIdle():
- * - setExactAndAllowWhileIdle() can be cleared when app is force-closed on some devices
- * - setAlarmClock() is treated as a "user-facing" alarm that Android protects
- * - Survives app force-close, battery optimization, and Doze mode
+ * - setAlarmClock() marks the event as a user-facing alarm.
+ * - Exact alarm permission is required for precise delivery
  */
 class NotificationScheduler(private val context: Context) {
     
@@ -47,14 +46,17 @@ class NotificationScheduler(private val context: Context) {
         const val ACTION_MIDNIGHT_SYNC = "com.tuttoposto.prayertimes.MIDNIGHT_SYNC"
         const val EXTRA_PRAYER_NAME = "prayer_name"
         const val EXTRA_MINUTES_REMAINING = "minutes_remaining"
+        const val EXTRA_PRAYER_END = "prayer_end_millis"
+        const val EXTRA_PRAYER_DATE = "prayer_date"
+        const val EXTRA_PRAYER_ZONE = "prayer_timezone"
         
         // Request code for midnight sync alarm (unique from prayer notifications)
         private const val MIDNIGHT_SYNC_REQUEST_CODE = 9000
         private const val REQUEST_CODE_TEST_PRAYER_START = 9979
         
-        // Time to trigger midnight sync (00:05 to ensure date has rolled over)
+        // Time to trigger local date rollover
         private const val MIDNIGHT_SYNC_HOUR = 0
-        private const val MIDNIGHT_SYNC_MINUTE = 5
+        private const val MIDNIGHT_SYNC_MINUTE = 0
     }
     
     /**
@@ -66,116 +68,49 @@ class NotificationScheduler(private val context: Context) {
      * 
      * No cancellation needed - prevents race conditions that caused missed notifications.
      */
-    fun scheduleAllNotificationsSimple(
-        prayerTimesCache: PrayerTimesCache,
+    fun scheduleDays(
+        days: List<PrayerTimesCache>,
         settings: AppSettings
     ): NotificationScheduleCache {
-        val today = LocalDate.now()
-        val currentTimezone = ZoneId.systemDefault().id
-        val nowMillis = System.currentTimeMillis()
-        
-        Log.d(TAG, "=== Scheduling notifications ===")
-        
-        if (!settings.globalNotificationsEnabled) {
-            Log.d(TAG, "Global notifications disabled - cancelling all")
-            cancelAllScheduledNotifications()
-            return NotificationScheduleCache(
-                date = today,
-                timezoneId = currentTimezone,
-                reminderOffsetMinutes = settings.reminderOffsetMinutes,
-                globalNotificationsEnabled = false,
-                prayerToggles = settings.prayerNotificationPreferences.toMap(),
-                entries = emptyList(),
-                prayerStartEntries = emptyList()
-            )
+        val plan = PrayerAlarmPlan.build(days, settings, System.currentTimeMillis())
+        fun id(alarm: PlannedPrayerAlarm): Int {
+            val base = if (alarm.isStart) NotificationHelper.getNotificationIdForPrayerStart(alarm.prayer.name)
+                else NotificationHelper.getNotificationIdForPrayer(alarm.prayer.name)
+            return base + alarm.daySlot * 10_000
         }
-        
-        val newEntries = mutableListOf<PrayerNotificationEntry>()
-        val newStartEntries = mutableListOf<PrayerNotificationEntry>()
-        
-        for (prayerTime in prayerTimesCache.prayers) {
-            val prayer = Prayer.fromName(prayerTime.name) ?: continue
-            val notificationId = NotificationHelper.getNotificationIdForPrayer(prayer.name)
-            
-            // If prayer notification is disabled, cancel any existing alarm for it
-            if (!settings.prayerNotificationPreferences.isEnabled(prayer)) {
-                cancelPrayerNotification(prayer, notificationId)
-                cancelPrayerStartNotification(
-                    prayer,
-                    NotificationHelper.getNotificationIdForPrayerStart(prayer.name)
-                )
-                continue
+        // Replace future alarms in place before retiring obsolete slots. Slot zero also
+        // covers the IDs used by the old single-day implementation.
+        for (alarm in plan) {
+            if (alarm.isStart) {
+                schedulePrayerStartNotification(alarm.prayer.name, alarm.atMillis, id(alarm))
+            } else {
+                scheduleNotification(alarm.prayer.name, alarm.atMillis, alarm.minutesRemaining, id(alarm),
+                    alarm.prayerDate, alarm.timezoneId)
             }
-            
-            val endTimeMillis = prayerTime.endTimeMillis
-            val notificationTimeMillis = endTimeMillis - (settings.reminderOffsetMinutes * 60 * 1000L)
-            
-            // Skip if prayer has ended or notification time has passed
-            if (nowMillis >= endTimeMillis || notificationTimeMillis <= nowMillis) {
-                continue
-            }
-            
-            // Schedule the notification
-            scheduleNotification(
-                prayerName = prayer.name,
-                triggerTimeMillis = notificationTimeMillis,
-                minutesRemaining = settings.reminderOffsetMinutes,
-                notificationId = notificationId
-            )
-            
-            newEntries.add(PrayerNotificationEntry(
-                prayerName = prayer.name,
-                notificationTimeMillis = notificationTimeMillis,
-                notificationId = notificationId
-            ))
         }
-
-        if (settings.notifyOnPrayerStart) {
-            for (prayerTime in prayerTimesCache.prayers) {
-                val prayer = Prayer.fromName(prayerTime.name) ?: continue
-                val startNotificationId = NotificationHelper.getNotificationIdForPrayerStart(prayer.name)
-
-                if (!settings.prayerNotificationPreferences.isEnabled(prayer)) {
-                    cancelPrayerStartNotification(prayer, startNotificationId)
-                    continue
-                }
-
-                val startTimeMillis = prayerTime.startTimeMillis
-                if (nowMillis >= startTimeMillis) {
-                    continue
-                }
-
-                schedulePrayerStartNotification(
-                    prayerName = prayer.name,
-                    triggerTimeMillis = startTimeMillis,
-                    notificationId = startNotificationId
-                )
-
-                newStartEntries.add(
-                    PrayerNotificationEntry(
-                        prayerName = prayer.name,
-                        notificationTimeMillis = startTimeMillis,
-                        notificationId = startNotificationId
-                    )
-                )
+        val wanted = plan.map(::id).toSet()
+        for (slot in 0..2) {
+            for (prayer in Prayer.entries) {
+                val endId = NotificationHelper.getNotificationIdForPrayer(prayer.name) + slot * 10_000
+                val startId = NotificationHelper.getNotificationIdForPrayerStart(prayer.name) + slot * 10_000
+                if (endId !in wanted) cancelPrayerNotification(prayer, endId)
+                if (startId !in wanted) cancelPrayerStartNotification(prayer, startId)
             }
-        } else {
-            cancelAllPrayerStartNotifications()
         }
-        
-        Log.d(TAG, "=== Scheduled ${newEntries.size} end + ${newStartEntries.size} start notifications ===")
-        
+        fun entries(start: Boolean) = plan.filter { it.isStart == start }.map {
+            PrayerNotificationEntry(it.prayer.name, it.atMillis, id(it))
+        }
         return NotificationScheduleCache(
-            date = today,
-            timezoneId = currentTimezone,
+            date = LocalDate.now(),
+            timezoneId = ZoneId.systemDefault().id,
             reminderOffsetMinutes = settings.reminderOffsetMinutes,
-            globalNotificationsEnabled = true,
+            globalNotificationsEnabled = settings.globalNotificationsEnabled,
             prayerToggles = settings.prayerNotificationPreferences.toMap(),
-            entries = newEntries,
-            prayerStartEntries = newStartEntries
+            entries = entries(false),
+            prayerStartEntries = entries(true)
         )
     }
-    
+
     /**
      * Schedule a single prayer notification using setAlarmClock().
      */
@@ -183,12 +118,17 @@ class NotificationScheduler(private val context: Context) {
         prayerName: String,
         triggerTimeMillis: Long,
         minutesRemaining: Int,
-        notificationId: Int
+        notificationId: Int,
+        prayerDate: LocalDate,
+        timezoneId: String
     ) {
         val intent = Intent(context, NotificationReceiver::class.java).apply {
             action = ACTION_PRAYER_NOTIFICATION
             putExtra(EXTRA_PRAYER_NAME, prayerName)
             putExtra(EXTRA_MINUTES_REMAINING, minutesRemaining)
+            putExtra(EXTRA_PRAYER_END, triggerTimeMillis + minutesRemaining * 60_000L)
+            putExtra(EXTRA_PRAYER_DATE, prayerDate.toString())
+            putExtra(EXTRA_PRAYER_ZONE, timezoneId)
         }
         
         val pendingIntent = PendingIntent.getBroadcast(
@@ -301,57 +241,14 @@ class NotificationScheduler(private val context: Context) {
      * Called when global notifications are disabled.
      */
     fun cancelAllScheduledNotifications() {
-        val prayers = listOf(
-            Prayer.FAJR to NotificationHelper.NOTIFICATION_ID_FAJR,
-            Prayer.DHUHR to NotificationHelper.NOTIFICATION_ID_DHUHR,
-            Prayer.ASR to NotificationHelper.NOTIFICATION_ID_ASR,
-            Prayer.MAGHRIB to NotificationHelper.NOTIFICATION_ID_MAGHRIB,
-            Prayer.ISHA to NotificationHelper.NOTIFICATION_ID_ISHA
-        )
-        
-        for ((prayer, notificationId) in prayers) {
-            val intent = Intent(context, NotificationReceiver::class.java).apply {
-                action = ACTION_PRAYER_NOTIFICATION
+        for (slot in 0..2) {
+            for (prayer in Prayer.entries) {
+                cancelPrayerNotification(prayer, NotificationHelper.getNotificationIdForPrayer(prayer.name) + slot * 10_000)
+                cancelPrayerStartNotification(prayer, NotificationHelper.getNotificationIdForPrayerStart(prayer.name) + slot * 10_000)
             }
-            
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                notificationId,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            alarmManager.cancel(pendingIntent)
-        }
-
-        cancelAllPrayerStartNotifications()
-        
-        Log.d(TAG, "❌ Cancelled all prayer notifications")
-        logEvent(NotificationEventType.CANCELLED, "ALL", "Global notifications disabled")
-    }
-
-    private fun cancelAllPrayerStartNotifications() {
-        val starts = listOf(
-            NotificationHelper.NOTIFICATION_ID_START_FAJR,
-            NotificationHelper.NOTIFICATION_ID_START_DHUHR,
-            NotificationHelper.NOTIFICATION_ID_START_ASR,
-            NotificationHelper.NOTIFICATION_ID_START_MAGHRIB,
-            NotificationHelper.NOTIFICATION_ID_START_ISHA
-        )
-        for (notificationId in starts) {
-            val intent = Intent(context, NotificationReceiver::class.java).apply {
-                action = ACTION_PRAYER_START
-            }
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                notificationId,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            alarmManager.cancel(pendingIntent)
         }
     }
-    
+
     /**
      * Schedule a test notification to fire in the specified number of seconds.
      */
@@ -503,12 +400,12 @@ class NotificationScheduler(private val context: Context) {
         val zoneId = ZoneId.systemDefault()
         val now = ZonedDateTime.now(zoneId)
         
-        // Calculate next 00:05
+        // Calculate next 00:00
         var targetTime = now.toLocalDate().atTime(MIDNIGHT_SYNC_HOUR, MIDNIGHT_SYNC_MINUTE)
             .atZone(zoneId)
         
-        // If we're past 00:05 today, schedule for tomorrow
-        if (now.isAfter(targetTime)) {
+        // If we're past 00:00 today, schedule for tomorrow
+        if (!now.isBefore(targetTime)) {
             targetTime = targetTime.plusDays(1)
         }
         
@@ -569,7 +466,7 @@ class NotificationScheduler(private val context: Context) {
             Instant.ofEpochMilli(millis),
             ZoneId.systemDefault()
         )
-        return dateTime.format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+        return dateTime.format(DateTimeFormatter.ofPattern("MMM d, HH:mm:ss"))
     }
     
     /**
