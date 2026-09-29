@@ -38,6 +38,7 @@ class PrayerAlarmPlaybackService : Service() {
     private var isForeground = false
     private val session = PlaybackSession()
     private var showFajrScreen = false
+    private var followUp: ReminderFollowUp? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -67,6 +68,7 @@ class PrayerAlarmPlaybackService : Service() {
         val preview = intent.getBooleanExtra(EXTRA_PREVIEW, false)
         if (!session.start(preview)) return START_NOT_STICKY
         showFajrScreen = intent.getBooleanExtra(EXTRA_FAJR_SCREEN, false)
+        followUp = if (!preview && !showFajrScreen) ReminderFollowUps.decode(intent.getStringExtra(EXTRA_FOLLOW_UP)) else null
         FajrAlarmScreenState.publish(if (showFajrScreen) FajrAlarmScreenSession(
             requireNotNull(session.token), intent.getLongExtra(EXTRA_SUNRISE, 0), preview
         ) else null)
@@ -119,7 +121,9 @@ class PrayerAlarmPlaybackService : Service() {
         }
 
         timeoutRunnable = Runnable { shutdown() }
-        mainHandler.postDelayed(timeoutRunnable!!, if (preview) NotificationHelper.PREVIEW_DURATION_MS else MAX_PLAYBACK_MS)
+        val duration = if (preview) NotificationHelper.PREVIEW_DURATION_MS else
+            followUp?.let { (it.endMillis - System.currentTimeMillis()).coerceIn(1L, MAX_PLAYBACK_MS) } ?: MAX_PLAYBACK_MS
+        mainHandler.postDelayed(timeoutRunnable!!, duration)
         return START_NOT_STICKY
     }
 
@@ -161,6 +165,8 @@ class PrayerAlarmPlaybackService : Service() {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setContentIntent(openApp)
             .apply {
+                followUp?.let { ReminderFollowUps.action(this@PrayerAlarmPlaybackService, it, token) }
+                    ?.let { addAction(it) }
                 if (showFajrScreen) {
                     setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     addAction(0, "Stop", stopFajr)
@@ -246,11 +252,12 @@ class PrayerAlarmPlaybackService : Service() {
         private const val EXTRA_SOUND_URI = "sound_uri"
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_TEXT = "text"
+        private const val EXTRA_FOLLOW_UP = "follow_up"
         const val PLAYBACK_NOTIFICATION_ID = 5001
         private const val MAX_PLAYBACK_MS = 20 * 60 * 1000L
 
         fun startPlayback(context: Context, soundUri: Uri, title: String, text: String, isPreview: Boolean = false,
-                          showFajrScreen: Boolean = false, sunriseMillis: Long = 0) {
+                          showFajrScreen: Boolean = false, sunriseMillis: Long = 0, followUp: ReminderFollowUp? = null) {
             val app = context.applicationContext
             if (!NotificationHelper.hasNotificationPermission(app)) {
                 Log.w(TAG, "No notification permission, skip alarm playback")
@@ -263,6 +270,7 @@ class PrayerAlarmPlaybackService : Service() {
                 putExtra(EXTRA_PREVIEW, isPreview)
                 putExtra(EXTRA_FAJR_SCREEN, showFajrScreen)
                 putExtra(EXTRA_SUNRISE, sunriseMillis)
+                followUp?.let { putExtra(EXTRA_FOLLOW_UP, ReminderFollowUps.encode(it)) }
             }
             ContextCompat.startForegroundService(app, intent)
         }

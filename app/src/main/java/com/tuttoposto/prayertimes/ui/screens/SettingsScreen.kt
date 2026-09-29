@@ -5,6 +5,7 @@ import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,15 +43,19 @@ import kotlinx.coroutines.delay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -71,12 +77,8 @@ import kotlin.math.roundToInt
 /**
  * Settings screen - controls for notification behavior and debug info.
  * 
- * Sections:
- * 1. Notifications - Global toggle, per-prayer toggles, offset, style
- * 2. Sync Status - Last sync, next sync, permission status, force sync button
- * 3. Today's Schedule - Debug info showing prayer times and notification status
- * 4. Sync Log - Recent sync attempts for debugging
- * 5. Testing - Test notification button
+ * Daily Fajr actions stay visible; infrequent setup is grouped into saved disclosures.
+ * Existing setting callbacks and hidden diagnostics are shared with the original screen.
  */
 @Composable
 fun SettingsScreen(
@@ -139,20 +141,6 @@ fun SettingsScreen(
                 }
         )
         
-        // Notifications Section (always visible)
-        NotificationsSection(
-            state = uiState,
-            onGlobalToggle = viewModel::setGlobalNotificationsEnabled,
-            onPrayerToggle = viewModel::setPrayerEnabled,
-            onOffsetChange = viewModel::setReminderOffset,
-            onEndReminderStyleChange = viewModel::setNotificationStyleEndReminder,
-            onPrayerStartStyleChange = viewModel::setNotificationStylePrayerStart,
-            onNotifyPrayerStartChange = viewModel::setNotifyOnPrayerStart,
-            onPrayerEzanToggle = viewModel::setPrayerEzanEnabled
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp))
-
         FajrWakeUpSection(
             state = uiState,
             onPrayerEnabled = { viewModel.setPrayerEnabled("FAJR", it) },
@@ -172,14 +160,38 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
         
-        // Display Section (always visible)
-        SectionCard(title = "Display") {
+        SectionCard(title = "Notifications") {
+            SettingsToggleRow(
+                title = "Enable prayer notifications",
+                subtitle = "Master switch for all prayer alerts",
+                checked = uiState.globalNotificationsEnabled,
+                onCheckedChange = viewModel::setGlobalNotificationsEnabled
+            )
+            AlarmReadinessSection(uiState.readinessChecks)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        NotificationsSection(
+            state = uiState,
+            onPrayerToggle = viewModel::setPrayerEnabled,
+            onOffsetChange = viewModel::setReminderOffset,
+            onEndReminderStyleChange = viewModel::setNotificationStyleEndReminder,
+            onPrayerStartStyleChange = viewModel::setNotificationStylePrayerStart,
+            onNotifyPrayerStartChange = viewModel::setNotifyOnPrayerStart,
+            onPrayerEzanToggle = viewModel::setPrayerEzanEnabled
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+        ExpandableSectionCard(title = "Appearance & calculation",
+            summary = if (uiState.useAmoledTheme) "AMOLED black · ISNA / Hanafi" else "Dark theme · ISNA / Hanafi") {
             SettingsToggleRow(
                 title = "AMOLED black theme",
                 subtitle = "Pure black background for OLED screens",
                 checked = uiState.useAmoledTheme,
                 onCheckedChange = viewModel::setUseAmoledTheme
             )
+            HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(vertical = 12.dp))
+            CalculationInfoSection()
         }
         
         // === DEBUG SECTIONS (hidden by default) ===
@@ -243,7 +255,6 @@ fun SettingsScreen(
 @Composable
 private fun NotificationsSection(
     state: SettingsUiState,
-    onGlobalToggle: (Boolean) -> Unit,
     onPrayerToggle: (String, Boolean) -> Unit,
     onOffsetChange: (Int) -> Unit,
     onEndReminderStyleChange: (NotificationStyle) -> Unit,
@@ -251,153 +262,76 @@ private fun NotificationsSection(
     onNotifyPrayerStartChange: (Boolean) -> Unit,
     onPrayerEzanToggle: (String, Boolean) -> Unit
 ) {
-    SectionCard(title = "Notifications") {
-        // Global toggle
-        SettingsToggleRow(
-            title = "Enable prayer notifications",
-            subtitle = "Master toggle for all notifications",
-            checked = state.globalNotificationsEnabled,
-            onCheckedChange = onGlobalToggle
+    val prayers = listOf(
+        Triple("FAJR", state.fajrEnabled, state.fajrEzan),
+        Triple("DHUHR", state.dhuhrEnabled, state.dhuhrEzan),
+        Triple("ASR", state.asrEnabled, state.asrEzan),
+        Triple("MAGHRIB", state.maghribEnabled, state.maghribEzan),
+        Triple("ISHA", state.ishaEnabled, state.ishaEzan)
+    ).filterNot { it.first == "FAJR" && state.fajrWakeUp.enabled }
+    ExpandableSectionCard(
+        title = "Prayer reminders",
+        summary = "${state.reminderOffsetMinutes} min before end · ${if (state.notificationStyleEndReminder == NotificationStyle.ALARMY) "Alarm-like" else "Normal"}"
+    ) {
+        Text(
+            if (state.fajrWakeUp.enabled) "Fajr has its own settings in the card above. These prayer switches also control prayer-start alerts."
+            else "Prayer switches control both before-end reminders and prayer-start alerts.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        
-        AlarmReadinessSection(state.readinessChecks)
-
-        if (state.globalNotificationsEnabled) {
-            HorizontalDivider(
-                color = PrayerTimesColors.divider,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
-            
-            // Per-prayer toggles
-            Text(
-                text = "Prayer Notifications",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            if (state.notifyOnPrayerStart) {
-                Text(
-                    text = stringResource(R.string.settings_ezan_per_prayer_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-
-            if (state.fajrWakeUp.enabled) {
-                Text(
-                    text = "Fajr notifications are configured in their own section below.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            } else {
-                PrayerNotificationRow(
-                    title = "Fajr",
-                    enabled = state.fajrEnabled,
-                    onEnabledChange = { onPrayerToggle("FAJR", it) },
-                    showEzan = state.notifyOnPrayerStart,
-                    ezanEnabled = state.fajrEzan,
-                    onEzanChange = { onPrayerEzanToggle("FAJR", it) }
-                )
-            }
-            PrayerNotificationRow(
-                title = "Dhuhr",
-                enabled = state.dhuhrEnabled,
-                onEnabledChange = { onPrayerToggle("DHUHR", it) },
-                showEzan = state.notifyOnPrayerStart,
-                ezanEnabled = state.dhuhrEzan,
-                onEzanChange = { onPrayerEzanToggle("DHUHR", it) }
-            )
-            PrayerNotificationRow(
-                title = "Asr",
-                enabled = state.asrEnabled,
-                onEnabledChange = { onPrayerToggle("ASR", it) },
-                showEzan = state.notifyOnPrayerStart,
-                ezanEnabled = state.asrEzan,
-                onEzanChange = { onPrayerEzanToggle("ASR", it) }
-            )
-            PrayerNotificationRow(
-                title = "Maghrib",
-                enabled = state.maghribEnabled,
-                onEnabledChange = { onPrayerToggle("MAGHRIB", it) },
-                showEzan = state.notifyOnPrayerStart,
-                ezanEnabled = state.maghribEzan,
-                onEzanChange = { onPrayerEzanToggle("MAGHRIB", it) }
-            )
-            PrayerNotificationRow(
-                title = "Isha",
-                enabled = state.ishaEnabled,
-                onEnabledChange = { onPrayerToggle("ISHA", it) },
-                showEzan = state.notifyOnPrayerStart,
-                ezanEnabled = state.ishaEzan,
-                onEzanChange = { onPrayerEzanToggle("ISHA", it) }
-            )
-
-            HorizontalDivider(
-                color = PrayerTimesColors.divider,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
-
+        prayers.forEach { (name, enabled, _) ->
             SettingsToggleRow(
-                title = stringResource(R.string.settings_notify_prayer_start),
-                subtitle = stringResource(R.string.settings_notify_prayer_start_sub),
-                checked = state.notifyOnPrayerStart,
-                onCheckedChange = onNotifyPrayerStartChange
+                title = com.tuttoposto.prayertimes.data.models.Prayer.valueOf(name).displayName,
+                subtitle = if (enabled) "Alerts enabled" else "Alerts off",
+                checked = enabled,
+                onCheckedChange = { onPrayerToggle(name, it) }
             )
+        }
+        HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(vertical = 12.dp))
+        ReminderOffsetSlider(state.reminderOffsetMinutes, onOffsetChange)
+        NotificationStyleBlock(
+            title = stringResource(R.string.settings_notification_style_before_end),
+            currentStyle = state.notificationStyleEndReminder,
+            onStyleChange = onEndReminderStyleChange
+        )
+        Text(
+            "Before-end reminders include Remind in 10 min. Close to the prayer end, the delay shortens to leave at least 2 minutes. Separate Fajr wake-ups stay unchanged.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 12.dp)
+        )
+    }
 
-            HorizontalDivider(
-                color = PrayerTimesColors.divider,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
-            
-            // Reminder offset slider
-            ReminderOffsetSlider(
-                currentValue = state.reminderOffsetMinutes,
-                onValueChange = onOffsetChange
-            )
-            if (state.fajrWakeUp.enabled) {
-                Text(
-                    text = "Fajr uses its separate wake-up settings below.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            
-            HorizontalDivider(
-                color = PrayerTimesColors.divider,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
-
+    Spacer(modifier = Modifier.height(16.dp))
+    ExpandableSectionCard(
+        title = "Prayer-start alerts",
+        summary = if (state.notifyOnPrayerStart) "On · Ezan and alert style" else "Off · Optional alerts when prayer begins"
+    ) {
+        SettingsToggleRow(
+            title = stringResource(R.string.settings_notify_prayer_start),
+            subtitle = stringResource(R.string.settings_notify_prayer_start_sub),
+            checked = state.notifyOnPrayerStart,
+            onCheckedChange = onNotifyPrayerStartChange
+        )
+        if (state.notifyOnPrayerStart) {
             NotificationStyleBlock(
-                title = stringResource(R.string.settings_notification_style_before_end),
-                currentStyle = state.notificationStyleEndReminder,
-                onStyleChange = onEndReminderStyleChange
+                title = stringResource(R.string.settings_notification_style_prayer_start),
+                currentStyle = state.notificationStylePrayerStart,
+                onStyleChange = onPrayerStartStyleChange
             )
-
-            if (state.notifyOnPrayerStart) {
-                Spacer(modifier = Modifier.height(16.dp))
-                NotificationStyleBlock(
-                    title = stringResource(R.string.settings_notification_style_prayer_start),
-                    currentStyle = state.notificationStylePrayerStart,
-                    onStyleChange = onPrayerStartStyleChange
+            HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(vertical = 12.dp))
+            Text("Ezan at prayer start", style = MaterialTheme.typography.titleSmall)
+            prayers.forEach { (name, enabled, ezan) ->
+                SettingsToggleRow(
+                    title = com.tuttoposto.prayertimes.data.models.Prayer.valueOf(name).displayName,
+                    subtitle = if (!enabled) "Prayer alerts are off in Prayer reminders"
+                        else if (ezan) "Ezan" else if (state.notificationStylePrayerStart == NotificationStyle.ALARMY) "Alarm sound" else "Notification sound",
+                    checked = ezan,
+                    onCheckedChange = { onPrayerEzanToggle(name, it) }
                 )
             }
-
-            HorizontalDivider(
-                color = PrayerTimesColors.divider,
-                modifier = Modifier.padding(vertical = 12.dp)
+            if (state.fajrWakeUp.enabled) Text(
+                "Fajr start permission and Ezan are in Fajr wake-up settings above.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            
-            
-            HorizontalDivider(
-                color = PrayerTimesColors.divider,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
-            
-            // Calculation info
-            CalculationInfoSection()
         }
     }
 }
@@ -420,113 +354,121 @@ private fun FajrWakeUpSection(
     onUndoSkip: () -> Unit
 ) {
     val wake = state.fajrWakeUp
+    val displayedMinutes = com.tuttoposto.prayertimes.data.models.FajrReminderTiming.selectionRange(state.nextFajrWindow)
+        ?.let { wake.minutesBeforeSunrise.coerceIn(it) } ?: wake.minutesBeforeSunrise
     val context = LocalContext.current
     val fullScreen = wake.enabled && wake.style == NotificationStyle.ALARMY
     val accessNeeded = state.readinessChecks.firstOrNull {
         it.action == com.tuttoposto.prayertimes.notifications.ReadinessAction.FULL_SCREEN && it.needsAttention
     }
-    SectionCard(title = "Fajr notifications") {
-        SettingsToggleRow(
-            title = "Use separate Fajr reminder",
-            subtitle = "Replaces Fajr’s shared before-end reminder.",
-            checked = wake.enabled,
-            onCheckedChange = onEnabled
-        )
-        if (wake.enabled) {
+    SectionCard(title = "Fajr wake-up") {
+        FajrSkipControls(state, onSkip, onUndoSkip)
+        SettingsDisclosure(
+            title = "Wake-up settings",
+            summary = if (wake.enabled) "$displayedMinutes min before sunrise · Separate reminder"
+                else "Shared ${state.reminderOffsetMinutes}-minute reminder",
+            keepOpen = previewRunning
+        ) {
             SettingsToggleRow(
-                title = "Enable Fajr notifications",
-                subtitle = "Controls all Fajr alerts, including the wake-up reminder.",
-                checked = state.fajrEnabled,
-                onCheckedChange = onPrayerEnabled
+                title = "Use separate Fajr reminder",
+                subtitle = "Replaces Fajr’s shared before-end reminder.",
+                checked = wake.enabled,
+                onCheckedChange = onEnabled
             )
-            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = PrayerTimesColors.divider)
-            FajrMinutePicker(wake.minutesBeforeSunrise, state.nextFajrWindow, onMinutes)
-            FajrSkipControls(state, onSkip, onUndoSkip)
-            Text("Wake-up sound", style = MaterialTheme.typography.titleSmall)
-            Spacer(modifier = Modifier.height(8.dp))
-            // Full-width options remain readable at larger font sizes.
-            ReminderSound.entries.forEach { sound ->
-                StyleButton(
-                    text = when (sound) {
-                        ReminderSound.EZAN -> "Ezan"
-                        ReminderSound.ALARM -> "Alarm sound"
-                        ReminderSound.NOTIFICATION -> "Notification sound"
-                    },
-                    selected = wake.sound == sound,
-                    onClick = { onSound(sound) },
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+            if (wake.enabled) {
+                SettingsToggleRow(
+                    title = "Enable Fajr notifications",
+                    subtitle = "Controls all Fajr alerts, including the wake-up reminder.",
+                    checked = state.fajrEnabled,
+                    onCheckedChange = onPrayerEnabled
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = PrayerTimesColors.divider)
+                FajrMinutePicker(wake.minutesBeforeSunrise, state.nextFajrWindow, onMinutes)
+                Text("Wake-up sound", style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(8.dp))
+                // Full-width options remain readable at larger font sizes.
+                ReminderSound.entries.forEach { sound ->
+                    StyleButton(
+                        text = when (sound) {
+                            ReminderSound.EZAN -> "Ezan"
+                            ReminderSound.ALARM -> "Alarm sound"
+                            ReminderSound.NOTIFICATION -> "Notification sound"
+                        },
+                        selected = wake.sound == sound,
+                        onClick = { onSound(sound) },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                NotificationStyleBlock(
+                    title = "Wake-up alert style",
+                    currentStyle = wake.style,
+                    onStyleChange = onStyle
+                )
+                Text(
+                    text = "Alarm-like uses alarm volume and a Fajr-only lock-screen alarm with Stop. Normal uses notification volume and stays a notification.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 12.dp)
+                )
+                SettingsToggleRow(
+                    title = "Also allow the Fajr start alert",
+                    subtitle = "Optional extra alert when Fajr begins. Also requires Prayer-start alerts below to be on.",
+                    checked = wake.notifyAtStart,
+                    onCheckedChange = onStart
                 )
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            NotificationStyleBlock(
-                title = "Wake-up alert style",
-                currentStyle = wake.style,
-                onStyleChange = onStyle
-            )
+            if (!wake.enabled) {
+                Text(
+                    text = "Fajr is in Prayer reminders below and uses the shared ${state.reminderOffsetMinutes}-minute reminder and style.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (wake.enabled && state.notifyOnPrayerStart && wake.notifyAtStart) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = PrayerTimesColors.divider)
+                SettingsToggleRow(
+                    title = "Ezan for Fajr start alert",
+                    subtitle = "Only affects the alert when Fajr begins. The wake-up reminder uses its own sound.",
+                    checked = state.fajrEzan,
+                    onCheckedChange = onStartEzan
+                )
+            }
+            TextButton(
+                onClick = {
+                    if (previewRunning) onStopTest()
+                    else if (fullScreen && accessNeeded != null) openReadinessSettings(context, accessNeeded)
+                    else onTest()
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(when {
+                previewRunning -> "Stop test"
+                fullScreen && accessNeeded != null -> "Allow full-screen alarms to test"
+                fullScreen -> "Test my Fajr alarm (10 s)"
+                else -> "Test my Fajr reminder"
+            }) }
             Text(
-                text = "Alarm-like uses alarm volume and a Fajr-only lock-screen alarm with Stop. Normal uses notification volume and stays a notification.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp, bottom = 12.dp)
-            )
-            SettingsToggleRow(
-                title = "Also allow the Fajr start alert",
-                subtitle = "Optional extra alert when Fajr begins. Requires prayer-start alerts above.",
-                checked = wake.notifyAtStart,
-                onCheckedChange = onStart
-            )
-        }
-        if (!wake.enabled) {
-            Text(
-                text = "Fajr is in the prayer list above and uses the shared ${state.reminderOffsetMinutes}-minute reminder and style.",
+                text = previewMessage ?: if (fullScreen)
+                    "Test starts after 10 seconds so you can lock your phone, then stops after 8 seconds. Android may show a banner while unlocked; tap it to open the alarm. Works even if app alerts are paused."
+                    else "Plays your current Fajr sound and style now, even if alerts are paused. Stops after 8 seconds; real alarms take priority.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            FajrSkipControls(state, onSkip, onUndoSkip)
-        }
-        if (wake.enabled && state.notifyOnPrayerStart && wake.notifyAtStart) {
-            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = PrayerTimesColors.divider)
-            SettingsToggleRow(
-                title = "Ezan for Fajr start alert",
-                subtitle = "Only affects the alert when Fajr begins. The wake-up reminder uses its own sound.",
-                checked = state.fajrEzan,
-                onCheckedChange = onStartEzan
-            )
-        }
-        TextButton(
-            onClick = {
-                if (previewRunning) onStopTest()
-                else if (fullScreen && accessNeeded != null) openReadinessSettings(context, accessNeeded)
-                else onTest()
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text(when {
-            previewRunning -> "Stop test"
-            fullScreen && accessNeeded != null -> "Allow full-screen alarms to test"
-            fullScreen -> "Test my Fajr alarm (10 s)"
-            else -> "Test my Fajr reminder"
-        }) }
-        Text(
-            text = previewMessage ?: if (fullScreen)
-                "Test starts after 10 seconds so you can lock your phone, then stops after 8 seconds. Android may show a banner while unlocked; tap it to open the alarm. Works even if app alerts are paused."
-                else "Plays your current Fajr sound and style now, even if alerts are paused. Stops after 8 seconds; real alarms take priority.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        if (wake.enabled && (!state.globalNotificationsEnabled || !state.fajrEnabled)) {
-            Text(
-                text = "Fajr alerts are paused until both prayer notifications and Fajr notifications are enabled.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp)
-            )
+            if (wake.enabled && (!state.globalNotificationsEnabled || !state.fajrEnabled)) {
+                Text(
+                    text = "Fajr alerts are paused until both prayer notifications and Fajr notifications are enabled.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun FajrSkipControls(state: SettingsUiState, onSkip: () -> Unit, onUndo: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Text(
             text = when {
                 !state.globalNotificationsEnabled -> "Paused: prayer notifications are off."
@@ -548,7 +490,9 @@ private fun FajrSkipControls(state: SettingsUiState, onSkip: () -> Unit, onUndo:
             Text("Only this wake-up is skipped. Prayer-start alerts stay unchanged.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else if (state.fajrSkipTarget != null) {
-            TextButton(onClick = onSkip, enabled = !state.fajrSkipBusy) { Text("Skip next Fajr wake-up") }
+            Button(onClick = onSkip, enabled = !state.fajrSkipBusy, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                Text("Skip next Fajr wake-up")
+            }
         }
         state.fajrSkipError?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -1231,6 +1175,52 @@ private fun TestingSection(
 }
 
 @Composable
+private fun ExpandableSectionCard(title: String, summary: String, content: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = PrayerTimesColors.cardBackground)
+    ) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+            SettingsDisclosure(title, summary, content = content)
+        }
+    }
+}
+
+@Composable
+private fun SettingsDisclosure(
+    title: String,
+    summary: String,
+    keepOpen: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val visible = expanded || keepOpen
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                .semantics { stateDescription = if (visible) "Expanded" else "Collapsed" }
+                .clickable(role = Role.Button, enabled = !keepOpen) { expanded = !expanded }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                Text(summary, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            }
+            Text(if (keepOpen) "Testing" else if (visible) "Hide" else "Edit",
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+        }
+        if (visible) {
+            HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(vertical = 12.dp))
+            content()
+        }
+    }
+}
+
+@Composable
 private fun SectionCard(
     title: String,
     content: @Composable () -> Unit
@@ -1257,61 +1247,6 @@ private fun SectionCard(
     }
 }
 
-/**
- * Per-prayer notification row: the prayer name, its enable switch, and — when prayer-start
- * alerts are on — a slightly smaller Ezan switch to the right (on = adhan, off = normal sound).
- */
-@Composable
-private fun PrayerNotificationRow(
-    title: String,
-    enabled: Boolean,
-    onEnabledChange: (Boolean) -> Unit,
-    showEzan: Boolean,
-    ezanEnabled: Boolean,
-    onEzanChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f)
-        )
-
-        Switch(
-            checked = enabled,
-            onCheckedChange = onEnabledChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = MaterialTheme.colorScheme.primary,
-                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
-                uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        )
-
-        if (showEzan) {
-            Spacer(modifier = Modifier.width(12.dp))
-            Switch(
-                checked = ezanEnabled,
-                onCheckedChange = onEzanChange,
-                enabled = enabled,
-                modifier = Modifier.scale(0.8f),
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.primary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
-                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            )
-        }
-    }
-}
 
 @Composable
 private fun SettingsToggleRow(

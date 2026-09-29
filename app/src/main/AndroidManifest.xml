@@ -163,6 +163,7 @@
             android:theme="@style/Theme.PrayerTimes" />
 
         <receiver android:name=".notifications.FajrPreviewReceiver" android:exported="false" />
+        <receiver android:name=".notifications.ReminderFollowUpReceiver" android:exported="false" />
 
         <receiver
             android:name=".notifications.PrayerAlarmDismissReceiver"

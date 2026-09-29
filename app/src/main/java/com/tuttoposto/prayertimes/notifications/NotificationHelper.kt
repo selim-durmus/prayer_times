@@ -245,13 +245,23 @@ object NotificationHelper {
         sound: ReminderSound = if (style == NotificationStyle.ALARMY) ReminderSound.ALARM else ReminderSound.NOTIFICATION,
         isFajrWakeUp: Boolean = false,
         isPreview: Boolean = false,
-        prayerEndTimeMillis: Long = System.currentTimeMillis() + minutesRemaining * 60_000L
+        prayerEndTimeMillis: Long = System.currentTimeMillis() + minutesRemaining * 60_000L,
+        prayerDate: String? = null,
+        prayerZone: String? = null
     ) {
         if (!hasNotificationPermission(context)) {
             return
         }
 
         val displayName = Prayer.fromName(prayerName)?.displayName ?: prayerName
+        val prayer = Prayer.fromName(prayerName)
+        // Preview, prayer-start and separate Fajr wake-up paths never create follow-ups.
+        val followUp = if (!isPreview && !isFajrWakeUp && prayer != null && prayerDate != null && prayerZone != null) {
+            if (prayerEndTimeMillis <= System.currentTimeMillis()) return
+            // The primary reminder still needs to play if persistence of the optional action fails.
+            runCatching { ReminderFollowUps.offer(context, prayer, prayerDate, prayerZone, prayerEndTimeMillis, style, sound) }
+                .onFailure { android.util.Log.e("PrayerReminder", "Could not offer follow-up", it) }.getOrNull()
+        } else null
 
         if (style == NotificationStyle.ALARMY) {
             val uri = reminderSoundUri(context, sound)
@@ -264,7 +274,8 @@ object NotificationHelper {
                 else context.getString(R.string.notification_reminder_alarm_playback, minutesRemaining),
                 isPreview = isPreview,
                 showFajrScreen = FajrAlarmPresentation.usesAlarmScreen(Prayer.fromName(prayerName), isFajrWakeUp, style),
-                sunriseMillis = prayerEndTimeMillis
+                sunriseMillis = prayerEndTimeMillis,
+                followUp = followUp
             )
             return
         }
@@ -291,7 +302,13 @@ object NotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .apply { if (isPreview) setTimeoutAfter(PREVIEW_DURATION_MS) }
+            .apply {
+                if (isPreview) setTimeoutAfter(PREVIEW_DURATION_MS)
+                else if (followUp != null) {
+                    setTimeoutAfter((prayerEndTimeMillis - System.currentTimeMillis()).coerceAtLeast(1))
+                    ReminderFollowUps.action(context, followUp)?.let { addAction(it) }
+                }
+            }
             .build()
 
         val notificationId = if (isPreview) NOTIFICATION_ID_FAJR_PREVIEW else getNotificationIdForPrayer(prayerName)

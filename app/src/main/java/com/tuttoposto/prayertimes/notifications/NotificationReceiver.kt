@@ -127,18 +127,21 @@ class NotificationReceiver : BroadcastReceiver() {
                     ?: java.time.Instant.ofEpochMilli(intent.getLongExtra(NotificationScheduler.EXTRA_PRAYER_END,
                         System.currentTimeMillis())).atZone(java.time.ZoneId.of(zone)).toLocalDate()
                 val skipped = settings.fajrWakeSkip?.matches(prayer, date, zone) == true
+                val endMillis = intent.getLongExtra(NotificationScheduler.EXTRA_PRAYER_END,
+                    System.currentTimeMillis() + minutesRemaining * 60_000L)
                 if (settings.globalNotificationsEnabled && prayer != null &&
-                    settings.prayerNotificationPreferences.isEnabled(prayer) && !skipped) {
+                    settings.prayerNotificationPreferences.isEnabled(prayer) && !skipped && endMillis > System.currentTimeMillis()) {
                     val alert = settings.reminderAlertFor(prayer)
                     NotificationHelper.showPrayerNotification(
                         context = context,
                         prayerName = prayerName,
-                        minutesRemaining = minutesRemaining,
+                        minutesRemaining = FollowUpTiming.minutesRemaining(System.currentTimeMillis(), endMillis),
                         style = alert.style,
                         sound = alert.sound,
                         isFajrWakeUp = prayer == Prayer.FAJR && settings.fajrWakeUp.enabled,
-                        prayerEndTimeMillis = intent.getLongExtra(NotificationScheduler.EXTRA_PRAYER_END,
-                            System.currentTimeMillis() + minutesRemaining * 60_000L)
+                        prayerEndTimeMillis = endMillis,
+                        prayerDate = date.toString(),
+                        prayerZone = zone
                     )
                     Log.d(TAG, "✅ Notification SHOWN for $prayerName")
                 } else {

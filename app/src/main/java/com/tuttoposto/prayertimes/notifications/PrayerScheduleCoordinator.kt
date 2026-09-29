@@ -35,9 +35,14 @@ class PrayerScheduleCoordinator(context: Context) {
     suspend fun scheduleFromCache(): NotificationScheduleCache = withContext(Dispatchers.IO) {
         scheduleMutex.withLock {
             val scheduler = NotificationScheduler(context)
+            val days = repository.getSchedulingDays()
+            val settings = SettingsRepository(context).getSettings()
             val schedule = scheduler.scheduleDays(
-                repository.getSchedulingDays(), SettingsRepository(context).getSettings()
+                days, settings
             )
+            // A failed follow-up must not block cache persistence, midnight scheduling or refresh.
+            try { ReminderFollowUps.reconcile(context, settings, days) }
+            catch (e: Exception) { android.util.Log.e("PrayerSchedule", "Could not restore follow-up reminders", e) }
             NotificationScheduleCacheRepository(context).saveScheduleCache(schedule)
             scheduler.scheduleMidnightSyncAlarm()
             val nextMidnight = java.time.LocalDate.now().plusDays(1)
