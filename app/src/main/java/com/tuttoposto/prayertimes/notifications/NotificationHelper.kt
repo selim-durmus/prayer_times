@@ -247,19 +247,20 @@ object NotificationHelper {
         isPreview: Boolean = false,
         prayerEndTimeMillis: Long = System.currentTimeMillis() + minutesRemaining * 60_000L,
         prayerDate: String? = null,
-        prayerZone: String? = null
+        prayerZone: String? = null,
+        isDebugTest: Boolean = false
     ) {
         if (!hasNotificationPermission(context)) {
             return
         }
 
-        val displayName = Prayer.fromName(prayerName)?.displayName ?: prayerName
+        val displayName = (Prayer.fromName(prayerName)?.displayName ?: prayerName) + if (isDebugTest) " · Test" else ""
         val prayer = Prayer.fromName(prayerName)
         // Preview, prayer-start and separate Fajr wake-up paths never create follow-ups.
         val followUp = if (!isPreview && !isFajrWakeUp && prayer != null && prayerDate != null && prayerZone != null) {
             if (prayerEndTimeMillis <= System.currentTimeMillis()) return
             // The primary reminder still needs to play if persistence of the optional action fails.
-            runCatching { ReminderFollowUps.offer(context, prayer, prayerDate, prayerZone, prayerEndTimeMillis, style, sound) }
+            runCatching { ReminderFollowUps.offer(context, prayer, prayerDate, prayerZone, prayerEndTimeMillis, style, sound, isDebugTest) }
                 .onFailure { android.util.Log.e("PrayerReminder", "Could not offer follow-up", it) }.getOrNull()
         } else null
 
@@ -275,7 +276,8 @@ object NotificationHelper {
                 isPreview = isPreview,
                 showFajrScreen = FajrAlarmPresentation.usesAlarmScreen(Prayer.fromName(prayerName), isFajrWakeUp, style),
                 sunriseMillis = prayerEndTimeMillis,
-                followUp = followUp
+                followUp = followUp,
+                isDebugTest = isDebugTest
             )
             return
         }
@@ -311,7 +313,8 @@ object NotificationHelper {
             }
             .build()
 
-        val notificationId = if (isPreview) NOTIFICATION_ID_FAJR_PREVIEW else getNotificationIdForPrayer(prayerName)
+        val notificationId = if (isPreview) NOTIFICATION_ID_FAJR_PREVIEW else if (isDebugTest) NOTIFICATION_ID_TEST
+            else getNotificationIdForPrayer(prayerName)
         NotificationManagerCompat.from(context).notify(notificationId, notification)
     }
 
@@ -324,31 +327,16 @@ object NotificationHelper {
      * Show a test notification (for debugging).
      */
     fun showTestNotification(context: Context, offsetMinutes: Int, style: NotificationStyle) {
-        if (!hasNotificationPermission(context)) {
-            return
-        }
-
-        if (style == NotificationStyle.ALARMY) {
-            PrayerAlarmPlaybackService.startPlayback(
-                context,
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
-                "Test Prayer Reminder",
-                context.getString(R.string.notification_reminder_test_alarm_playback, offsetMinutes)
-            )
-            return
-        }
-
-        val channelId = channelIdForEndReminder()
-        val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Test Prayer Reminder")
-            .setContentText("This is a test notification. Current offset: $offsetMinutes minutes before prayer end.")
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setCategory(NotificationCompat.CATEGORY_REMINDER)
-            .setAutoCancel(true)
-            .build()
-        
-        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID_TEST, notification)
+        val zone = java.time.ZoneId.systemDefault()
+        // A synthetic Dhuhr window uses exactly the real reminder presentation and follow-up
+        // timing. Its notification, saved record and alarm IDs are separate from real prayers.
+        showPrayerNotification(
+            context, Prayer.DHUHR.name, offsetMinutes, style,
+            prayerEndTimeMillis = System.currentTimeMillis() + offsetMinutes * 60_000L,
+            prayerDate = java.time.LocalDate.now(zone).toString(),
+            prayerZone = zone.id,
+            isDebugTest = true
+        )
     }
 
     fun showPrayerStartedNotification(
@@ -374,7 +362,8 @@ object NotificationHelper {
                 context,
                 uri,
                 context.getString(R.string.notification_prayer_started_title, displayName),
-                ""
+                "",
+                isDebugTest = notificationIdOverride != null
             )
             return
         }

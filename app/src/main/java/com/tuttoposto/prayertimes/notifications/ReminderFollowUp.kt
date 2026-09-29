@@ -15,7 +15,8 @@ data class ReminderFollowUp(
     val endMillis: Long,
     val style: NotificationStyle,
     val sound: ReminderSound,
-    val atMillis: Long? = null
+    val atMillis: Long? = null,
+    val isTest: Boolean = false
 ) {
     init {
         require(token.isNotBlank())
@@ -24,13 +25,14 @@ data class ReminderFollowUp(
         require(endMillis > 0 && (atMillis == null || atMillis in 1 until endMillis))
     }
 
-    fun allowed(settings: AppSettings): Boolean = settings.globalNotificationsEnabled &&
+    fun allowed(settings: AppSettings): Boolean = if (isTest) settings.debugModeEnabled else settings.globalNotificationsEnabled &&
         settings.prayerNotificationPreferences.isEnabled(prayer) &&
         !(prayer == Prayer.FAJR && settings.fajrWakeUp.enabled) &&
         settings.fajrWakeSkip?.matches(prayer, LocalDate.parse(prayerDate), timezoneId) != true
 
     /** A refresh may shorten the window, but must never extend a snoozed occurrence's deadline. */
     fun withCachedDeadline(days: List<PrayerTimesCache>): ReminderFollowUp {
+        if (isTest) return this // Simulated window; never borrow a real prayer's deadline.
         val end = days.firstOrNull { it.date.toString() == prayerDate && it.timezoneId == timezoneId }
             ?.prayers?.firstOrNull { Prayer.fromName(it.name) == prayer }?.endTimeMillis
             ?.coerceAtMost(endMillis) ?: endMillis

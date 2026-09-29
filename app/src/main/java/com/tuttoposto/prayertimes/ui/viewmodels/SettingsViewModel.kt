@@ -75,6 +75,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val previewRunning = _previewRunning.asStateFlow()
     private val _previewMessage = MutableStateFlow<String?>(null)
     val previewMessage = _previewMessage.asStateFlow()
+    private val _debugTestMessage = MutableStateFlow<String?>(null)
+    val debugTestMessage = _debugTestMessage.asStateFlow()
     private var previewJob: Job? = null
     
     init {
@@ -466,21 +468,42 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
      * Send a test notification in 5 seconds.
      */
     fun sendTestNotification() {
-        Log.d(TAG, "Scheduling test notification")
-        notificationScheduler.scheduleTestNotification(5)
+        scheduleDebugTest("Reminder test scheduled in 5 seconds. Open the notification shade to try Remind in 10 min.") {
+            notificationScheduler.scheduleTestNotification(5)
+        }
     }
 
     fun sendTestPrayerStartNotification() {
-        Log.d(TAG, "Scheduling test prayer-start notification")
-        notificationScheduler.scheduleTestPrayerStartNotification(5)
+        scheduleDebugTest("Maghrib start test scheduled in 5 seconds. Start alerts do not have a follow-up button.") {
+            notificationScheduler.scheduleTestPrayerStartNotification(5)
+        }
     }
     
     /**
      * Send a delayed test notification (2 minutes) to test if alarms survive app close.
      */
     fun sendDelayedTestNotification() {
-        Log.d(TAG, "Scheduling delayed test notification (2 min)")
-        notificationScheduler.scheduleDelayedTestNotification()
+        scheduleDebugTest("Reminder test scheduled in 2 minutes. You can leave the app or lock your phone; do not force-stop it.") {
+            notificationScheduler.scheduleDelayedTestNotification()
+        }
+    }
+
+    private fun scheduleDebugTest(message: String, schedule: () -> Unit) {
+        viewModelScope.launch {
+            if (!settingsRepository.getSettings().debugModeEnabled) return@launch
+            if (!NotificationHelper.hasNotificationPermission(getApplication())) {
+                _debugTestMessage.value = "Allow notifications in Alarm readiness before testing."
+                return@launch
+            }
+            try {
+                schedule()
+                _debugTestMessage.value = message + if (!notificationScheduler.canScheduleExactAlarms())
+                    " Exact alarms are off, so Android may delay delivery." else ""
+            } catch (e: Exception) {
+                Log.e(TAG, "Could not schedule debug notification", e)
+                _debugTestMessage.value = "Could not schedule the test. Check Alarm readiness and try again."
+            }
+        }
     }
     
     /**

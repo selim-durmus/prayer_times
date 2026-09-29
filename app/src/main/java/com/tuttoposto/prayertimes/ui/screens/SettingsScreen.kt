@@ -28,6 +28,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -194,47 +195,34 @@ fun SettingsScreen(
             CalculationInfoSection()
         }
         
-        // === DEBUG SECTIONS (hidden by default) ===
+        // Debug actions first; diagnostics stay compact until needed.
         if (uiState.debugModeEnabled) {
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Sync Status Section
-            SyncStatusSection(
+            Spacer(Modifier.height(24.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Developer tools", style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                TextButton(onClick = viewModel::toggleDebugMode) { Text("Hide") }
+            }
+            val debugMessage by viewModel.debugTestMessage.collectAsState()
+            TestingSection(
                 state = uiState,
-                onForceSync = viewModel::forceSync
+                message = debugMessage,
+                onTestNotification = viewModel::sendTestNotification,
+                onDelayedTestNotification = viewModel::sendDelayedTestNotification,
+                onTestPrayerStartNotification = viewModel::sendTestPrayerStartNotification
             )
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Today's Schedule Section
+            Spacer(Modifier.height(16.dp))
+            SyncStatusSection(state = uiState, onForceSync = viewModel::forceSync)
+            Spacer(Modifier.height(16.dp))
             TodayScheduleSection(
                 prayerTimes = uiState.prayerTimesInfo,
                 notificationStatus = uiState.notificationStatusInfo,
                 hasPrayerData = uiState.hasPrayerData
             )
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Sync Log Section
-            if (uiState.recentSyncLogs.isNotEmpty()) {
-                SyncLogSection(logs = uiState.recentSyncLogs)
-                Spacer(modifier = Modifier.height(24.dp))
-            }
-            
-            // Notification Log Section (for debugging alarm fires)
-            NotificationLogSection(
-                logs = uiState.recentNotificationLogs,
-                onClearLog = viewModel::clearNotificationLog
-            )
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Testing Section
-            TestingSection(
-                onTestNotification = viewModel::sendTestNotification,
-                onDelayedTestNotification = viewModel::sendDelayedTestNotification,
-                onTestPrayerStartNotification = viewModel::sendTestPrayerStartNotification
-            )
+            Spacer(Modifier.height(16.dp))
+            NotificationLogSection(logs = uiState.recentNotificationLogs, onClearLog = viewModel::clearNotificationLog)
+            Spacer(Modifier.height(16.dp))
+            SyncLogSection(logs = uiState.recentSyncLogs)
         }
         
         Spacer(modifier = Modifier.height(32.dp))
@@ -558,14 +546,14 @@ private fun SyncStatusSection(
 ) {
     val context = LocalContext.current
     
-    SectionCard(title = "Sync Status") {
+    ExpandableSectionCard(title = "Sync & delivery", summary = "Last sync: ${state.lastSyncTime ?: "Never"} · Refresh and permissions") {
         // Last sync time
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "Last successful sync",
+            text = "Last successful sync",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -635,7 +623,7 @@ private fun SyncStatusSection(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Required for reliable midnight sync",
+                    text = "For on-time reminders and midnight sync",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -666,8 +654,7 @@ private fun SyncStatusSection(
         
         if (!state.canScheduleExactAlarms) {
             Text(
-                text = "⚠️ Without this permission, the midnight sync alarm may be delayed, " +
-                       "potentially causing missed morning prayer notifications.",
+                text = "Without exact alarm access, Android may delay reminders and the midnight sync.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(top = 8.dp)
@@ -713,7 +700,8 @@ private fun SyncStatusSection(
 
 @Composable
 private fun SyncLogSection(logs: List<SyncLogEntry>) {
-    SectionCard(title = "Recent Sync Log") {
+    ExpandableSectionCard(title = "Sync history", summary = "${logs.size} recent attempts · Newest first") {
+        if (logs.isEmpty()) Text("No sync attempts recorded yet.", style = MaterialTheme.typography.bodySmall)
         Text(
             text = "Last ${logs.size} sync attempts (newest first)",
             style = MaterialTheme.typography.bodySmall,
@@ -789,7 +777,7 @@ private fun NotificationLogSection(
     logs: List<NotificationLogEntry>,
     onClearLog: () -> Unit
 ) {
-    SectionCard(title = "Notification Events Log") {
+    ExpandableSectionCard(title = "Notification history", summary = "${logs.size} events · Scheduling, delivery and errors") {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1033,7 +1021,7 @@ private fun TodayScheduleSection(
     notificationStatus: List<NotificationStatusInfo>,
     hasPrayerData: Boolean
 ) {
-    SectionCard(title = "Today's Schedule") {
+    ExpandableSectionCard(title = "Prayer times & schedule", summary = if (hasPrayerData) "Today's times and saved upcoming alarms" else "No saved prayer times") {
         if (!hasPrayerData) {
             Text(
                 text = "No prayer data yet",
@@ -1077,7 +1065,7 @@ private fun TodayScheduleSection(
             
             // Notification status
             Text(
-                text = "Scheduled Notifications (System Verified)",
+                text = "Saved upcoming alarms (not a delivery guarantee)",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 8.dp)
@@ -1100,7 +1088,7 @@ private fun TodayScheduleSection(
                         text = status.status,
                         style = MaterialTheme.typography.bodySmall,
                         color = when {
-                            status.status.contains("Alarm at") -> PrayerTimesColors.success
+                            status.status.contains("End reminder") || status.status.contains("Start ") -> PrayerTimesColors.success
                             status.status.contains("Disabled") -> MaterialTheme.colorScheme.onSurfaceVariant
                             else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         }
@@ -1113,64 +1101,47 @@ private fun TodayScheduleSection(
 
 @Composable
 private fun TestingSection(
+    state: SettingsUiState,
+    message: String?,
     onTestNotification: () -> Unit,
     onDelayedTestNotification: () -> Unit,
     onTestPrayerStartNotification: () -> Unit
 ) {
-    SectionCard(title = "Testing") {
+    SectionCard(title = "Notification tests") {
+        Text("Before-end reminder", style = MaterialTheme.typography.titleSmall)
         Text(
-            text = "Send a test notification to verify your settings are working correctly.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 12.dp)
+            "Dhuhr · Test · ${state.reminderOffsetMinutes} minutes remaining · ${if (state.notificationStyleEndReminder == NotificationStyle.ALARMY) "Alarm-like" else "Normal"}",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
         )
-        
-        Button(
-            onClick = onTestNotification,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-            ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Text(text = "Send test notification (in 5 seconds)")
+        Button(onClick = onTestNotification, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+            Text("Test reminder · 5 seconds")
         }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Button(
-            onClick = onTestPrayerStartNotification,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-            ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Text(text = "Test prayer-start notification (in 5 seconds, Maghrib)")
+        OutlinedButton(onClick = onDelayedTestNotification, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+            Text("Test in background · 2 minutes")
         }
-
-        Spacer(modifier = Modifier.height(12.dp))
-        
         Text(
-            text = "Test if alarms survive app close: Schedule notification, close app, wait 2 min.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 8.dp)
+            "Same notification, sound and Remind in 10 min button as a real reminder. The countdown uses a simulated prayer window; each follow-up waits the real delay and updates the remaining time.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp)
         )
-        
-        Button(
-            onClick = onDelayedTestNotification,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                contentColor = MaterialTheme.colorScheme.onError
-            ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Text(text = "🧪 Delayed test (2 min) - CLOSE APP AFTER!")
+        HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(vertical = 16.dp))
+        Text("Prayer-start alert", style = MaterialTheme.typography.titleSmall)
+        Text("Maghrib · Current start-alert style and Ezan choice. No follow-up button.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+        OutlinedButton(onClick = onTestPrayerStartNotification, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+            Text("Test prayer start · 5 seconds")
         }
+        message?.let {
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 12.dp))
+        }
+        Text(
+            "Tests work even when prayer switches are paused and never replace real reminders. Real alarms take priority. Fajr’s lock-screen test stays in Wake-up settings. Tests only deliver while developer tools are enabled.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 12.dp)
+        )
     }
 }
 

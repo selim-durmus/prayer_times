@@ -13,6 +13,7 @@ import com.squareup.moshi.Moshi
 import com.tuttoposto.prayertimes.data.models.*
 import com.tuttoposto.prayertimes.data.repository.PrayerTimesRepository
 import com.tuttoposto.prayertimes.data.repository.SettingsRepository
+import com.tuttoposto.prayertimes.data.repository.NotificationLogRepository
 import com.tuttoposto.prayertimes.ui.MainActivity
 import kotlinx.coroutines.*
 import java.util.UUID
@@ -26,35 +27,39 @@ object ReminderFollowUps {
     internal const val TOKEN = "follow_up_token"
     internal const val PLAYBACK_TOKEN = "follow_up_playback_token"
     internal const val PRAYER = "follow_up_prayer"
+    internal const val TEST = "follow_up_test"
 
     private fun prefs(context: Context) = context.getSharedPreferences("reminder_follow_ups", Context.MODE_PRIVATE)
-    private fun read(context: Context, prayer: Prayer): ReminderFollowUp? = runCatching {
-        prefs(context).getString(prayer.name, null)?.let(adapter::fromJson)?.takeIf { it.prayer == prayer }
+    private fun key(prayer: Prayer, isTest: Boolean) = if (isTest) "test_${prayer.name}" else prayer.name
+    private fun read(context: Context, prayer: Prayer, isTest: Boolean = false): ReminderFollowUp? = runCatching {
+        prefs(context).getString(key(prayer, isTest), null)?.let(adapter::fromJson)
+            ?.takeIf { it.prayer == prayer && it.isTest == isTest }
     }.getOrNull()
 
     private fun save(context: Context, item: ReminderFollowUp) {
-        check(prefs(context).edit().putString(item.prayer.name, adapter.toJson(item)).commit())
+        check(prefs(context).edit().putString(key(item.prayer, item.isTest), adapter.toJson(item)).commit())
     }
 
-    private fun alarmIntent(context: Context, prayer: Prayer, token: String = ""): PendingIntent =
-        PendingIntent.getBroadcast(context, 30_000 + prayer.ordinal,
+    private fun alarmIntent(context: Context, prayer: Prayer, token: String = "", isTest: Boolean = false): PendingIntent =
+        PendingIntent.getBroadcast(context, 30_000 + prayer.ordinal + if (isTest) 500 else 0,
             Intent(context, ReminderFollowUpReceiver::class.java).apply {
                 action = FIRE
                 putExtra(PRAYER, prayer.name)
                 putExtra(TOKEN, token)
+                putExtra(TEST, isTest)
             }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-    private fun cancel(context: Context, prayer: Prayer) {
-        context.getSystemService(AlarmManager::class.java).cancel(alarmIntent(context, prayer))
-        check(prefs(context).edit().remove(prayer.name).commit())
+    private fun cancel(context: Context, prayer: Prayer, isTest: Boolean = false) {
+        context.getSystemService(AlarmManager::class.java).cancel(alarmIntent(context, prayer, isTest = isTest))
+        check(prefs(context).edit().remove(key(prayer, isTest)).commit())
     }
 
     private fun schedule(context: Context, item: ReminderFollowUp, now: Long) {
         val alarm = context.getSystemService(AlarmManager::class.java)
         val at = maxOf(requireNotNull(item.atMillis), now + 500)
-        val operation = alarmIntent(context, item.prayer, item.token)
+        val operation = alarmIntent(context, item.prayer, item.token, item.isTest)
         if (alarm.canScheduleExactAlarms()) {
-            val open = PendingIntent.getActivity(context, 30_100 + item.prayer.ordinal,
+            val open = PendingIntent.getActivity(context, 30_100 + item.prayer.ordinal + if (item.isTest) 500 else 0,
                 Intent(context, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             alarm.setAlarmClock(AlarmManager.AlarmClockInfo(at, open), operation)
         } else {
@@ -62,11 +67,11 @@ object ReminderFollowUps {
         }
     }
 
-    /** Issued only for real, shared before-end reminders; each displayed alert invalidates old actions. */
+    /** Shared before-end reminders and isolated debug samples; each alert invalidates its old actions. */
     fun offer(context: Context, prayer: Prayer, date: String, zone: String, end: Long,
-              style: NotificationStyle, sound: ReminderSound): ReminderFollowUp = synchronized(lock) {
-        cancel(context, prayer)
-        ReminderFollowUp(UUID.randomUUID().toString(), prayer, date, zone, end, style, sound)
+              style: NotificationStyle, sound: ReminderSound, isTest: Boolean = false): ReminderFollowUp = synchronized(lock) {
+        cancel(context, prayer, isTest)
+        ReminderFollowUp(UUID.randomUUID().toString(), prayer, date, zone, end, style, sound, isTest = isTest)
             .also { save(context, it) }
     }
 
@@ -78,6 +83,7 @@ object ReminderFollowUps {
             putExtra(PRAYER, item.prayer.name)
             putExtra(TOKEN, item.token)
             putExtra(PLAYBACK_TOKEN, playbackToken)
+            putExtra(TEST, item.isTest)
         }
         return NotificationCompat.Action(0, "Remind in $minutes min", PendingIntent.getBroadcast(context,
             31_000 + item.prayer.ordinal, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
@@ -89,12 +95,12 @@ object ReminderFollowUps {
     /** Reboot/refresh/settings changes restore pending reminders without touching regular alarm slots. */
     fun reconcile(context: Context, settings: AppSettings, days: List<PrayerTimesCache>) = synchronized(lock) {
         val now = System.currentTimeMillis()
-        for (prayer in Prayer.entries) {
-            val saved = read(context, prayer) ?: continue
+        for ((prayer, isTest) in Prayer.entries.map { it to false } + (Prayer.DHUHR to true)) {
+            val saved = read(context, prayer, isTest) ?: continue
             val item = saved.withCachedDeadline(days)
             if (!item.allowed(settings) || item.endMillis <= now + 500 ||
                 (saved.atMillis != null && item.atMillis == null)) {
-                cancel(context, prayer)
+                cancel(context, prayer, isTest)
             } else {
                 if (item != saved) save(context, item)
                 if (item.atMillis != null) schedule(context, item, now)
@@ -105,7 +111,8 @@ object ReminderFollowUps {
     fun handle(context: Context, intent: Intent, settings: AppSettings, days: List<PrayerTimesCache>): String? = synchronized(lock) {
         val prayer = intent.getStringExtra(PRAYER)?.let(Prayer::fromName) ?: return@synchronized null
         val token = intent.getStringExtra(TOKEN) ?: return@synchronized null
-        val saved = read(context, prayer) ?: return@synchronized null
+        val isTest = intent.getBooleanExtra(TEST, false)
+        val saved = read(context, prayer, isTest) ?: return@synchronized null
         if (saved.token != token) return@synchronized null
         val item = saved.withCachedDeadline(days)
         val now = System.currentTimeMillis()
@@ -125,26 +132,42 @@ object ReminderFollowUps {
                         intent.getStringExtra(PLAYBACK_TOKEN)?.let { PrayerAlarmPlaybackService.stopSession(context, it) }
                     }.onFailure { Log.w("ReminderFollowUp", "Could not stop previous playback", it) }
                 } else {
-                    NotificationHelper.cancelNotification(context, NotificationHelper.getNotificationIdForPrayer(prayer.name))
+                    NotificationHelper.cancelNotification(context, if (isTest) NotificationHelper.NOTIFICATION_ID_TEST
+                        else NotificationHelper.getNotificationIdForPrayer(prayer.name))
                 }
+                log(context, pending, NotificationEventType.SCHEDULED,
+                    "Follow-up in ${(pending.atMillis!! - now) / FollowUpTiming.MINUTE} min")
                 "Reminder set for ${(pending.atMillis!! - now) / FollowUpTiming.MINUTE} minutes from now."
             }
             FIRE -> {
                 if (!item.canDeliver(token, now, settings)) {
-                    if (!item.allowed(settings) || now >= item.endMillis || item.atMillis == null) cancel(context, prayer)
+                    if (!item.allowed(settings) || now >= item.endMillis || item.atMillis == null) cancel(context, prayer, isTest)
                     return@synchronized null
                 }
                 // Consume even if notification permission was revoked or optional persistence fails.
-                cancel(context, prayer)
+                cancel(context, prayer, isTest)
+                log(context, item, NotificationEventType.FIRED,
+                    "Follow-up fired: ${FollowUpTiming.minutesRemaining(now, item.endMillis)} min remaining")
                 // showPrayerNotification replaces the token before posting the follow-up. The next
                 // action may repeat the process, but duplicate delivery of this token is ignored.
                 NotificationHelper.showPrayerNotification(context, prayer.name,
                     FollowUpTiming.minutesRemaining(now, item.endMillis), item.style, item.sound,
-                    prayerEndTimeMillis = item.endMillis, prayerDate = item.prayerDate, prayerZone = item.timezoneId)
+                    prayerEndTimeMillis = item.endMillis, prayerDate = item.prayerDate, prayerZone = item.timezoneId,
+                    isDebugTest = item.isTest)
                 null
             }
             else -> null
         }
+    }
+
+    private fun log(context: Context, item: ReminderFollowUp, type: NotificationEventType, message: String) {
+        // Diagnostic storage must not prevent notification delivery.
+        try {
+            runBlocking {
+                NotificationLogRepository(context).logEvent(type,
+                    item.prayer.name + if (item.isTest) "_TEST" else "", message)
+            }
+        } catch (e: Exception) { Log.w("ReminderFollowUp", "Could not record follow-up event", e) }
     }
 }
 
@@ -155,7 +178,8 @@ class ReminderFollowUpReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val settings = SettingsRepository(context).getSettings()
-                val days = PrayerTimesRepository(context).getSchedulingDays()
+                val days = if (intent.getBooleanExtra(ReminderFollowUps.TEST, false)) emptyList()
+                    else PrayerTimesRepository(context).getSchedulingDays()
                 val message = ReminderFollowUps.handle(context, intent, settings, days)
                 if (message != null) withContext(Dispatchers.Main) {
                     Toast.makeText(context, message, Toast.LENGTH_LONG).show()

@@ -66,7 +66,9 @@ class PrayerAlarmPlaybackService : Service() {
         val title = intent.getStringExtra(EXTRA_TITLE) ?: getString(R.string.app_name)
         val text = intent.getStringExtra(EXTRA_TEXT) ?: ""
         val preview = intent.getBooleanExtra(EXTRA_PREVIEW, false)
-        if (!session.start(preview)) return START_NOT_STICKY
+        val debugTest = intent.getBooleanExtra(EXTRA_DEBUG_TEST, false)
+        // Test notifications use the real playback path but cannot interrupt a real alarm.
+        if (!session.start(preview || debugTest)) return START_NOT_STICKY
         showFajrScreen = intent.getBooleanExtra(EXTRA_FAJR_SCREEN, false)
         followUp = if (!preview && !showFajrScreen) ReminderFollowUps.decode(intent.getStringExtra(EXTRA_FOLLOW_UP)) else null
         FajrAlarmScreenState.publish(if (showFajrScreen) FajrAlarmScreenSession(
@@ -181,6 +183,8 @@ class PrayerAlarmPlaybackService : Service() {
                     if (session.preview) 4 else 3,
                     Intent(this, PrayerAlarmDismissReceiver::class.java).apply {
                         putExtra(PrayerAlarmDismissReceiver.EXTRA_PREVIEW, session.preview)
+                        data = Uri.parse("prayertimes://stop-playback/$token")
+                        putExtra(FajrAlarmActivity.EXTRA_TOKEN, token)
                     },
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
@@ -253,11 +257,13 @@ class PrayerAlarmPlaybackService : Service() {
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_TEXT = "text"
         private const val EXTRA_FOLLOW_UP = "follow_up"
+        private const val EXTRA_DEBUG_TEST = "debug_test"
         const val PLAYBACK_NOTIFICATION_ID = 5001
         private const val MAX_PLAYBACK_MS = 20 * 60 * 1000L
 
         fun startPlayback(context: Context, soundUri: Uri, title: String, text: String, isPreview: Boolean = false,
-                          showFajrScreen: Boolean = false, sunriseMillis: Long = 0, followUp: ReminderFollowUp? = null) {
+                          showFajrScreen: Boolean = false, sunriseMillis: Long = 0, followUp: ReminderFollowUp? = null,
+                          isDebugTest: Boolean = false) {
             val app = context.applicationContext
             if (!NotificationHelper.hasNotificationPermission(app)) {
                 Log.w(TAG, "No notification permission, skip alarm playback")
@@ -271,6 +277,7 @@ class PrayerAlarmPlaybackService : Service() {
                 putExtra(EXTRA_FAJR_SCREEN, showFajrScreen)
                 putExtra(EXTRA_SUNRISE, sunriseMillis)
                 followUp?.let { putExtra(EXTRA_FOLLOW_UP, ReminderFollowUps.encode(it)) }
+                putExtra(EXTRA_DEBUG_TEST, isDebugTest)
             }
             ContextCompat.startForegroundService(app, intent)
         }

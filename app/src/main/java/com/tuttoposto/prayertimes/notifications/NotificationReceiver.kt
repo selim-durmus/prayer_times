@@ -183,6 +183,7 @@ class NotificationReceiver : BroadcastReceiver() {
                 val settingsRepository = SettingsRepository(context)
                 val settings = settingsRepository.getSettings()
 
+                if (!settings.debugModeEnabled) return@launch
                 NotificationHelper.showPrayerStartedNotification(
                     context = context,
                     prayerName = Prayer.MAGHRIB.name,
@@ -221,6 +222,7 @@ class NotificationReceiver : BroadcastReceiver() {
                 val settingsRepository = SettingsRepository(context)
                 val settings = settingsRepository.getSettings()
                 
+                if (!settings.debugModeEnabled) return@launch
                 NotificationHelper.showTestNotification(
                     context = context,
                     offsetMinutes = settings.reminderOffsetMinutes,
