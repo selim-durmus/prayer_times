@@ -277,7 +277,9 @@ object NotificationHelper {
                 showFajrScreen = FajrAlarmPresentation.usesAlarmScreen(Prayer.fromName(prayerName), isFajrWakeUp, style),
                 sunriseMillis = prayerEndTimeMillis,
                 followUp = followUp,
-                isDebugTest = isDebugTest
+                isDebugTest = isDebugTest,
+                // A wake-up keeps sounding until stopped; an Ezan reminder plays through once.
+                loop = isFajrWakeUp || sound != ReminderSound.EZAN
             )
             return
         }
@@ -353,17 +355,14 @@ object NotificationHelper {
         val displayName = Prayer.fromName(prayerName)?.displayName ?: prayerName
 
         if (style == NotificationStyle.ALARMY) {
-            val uri = when {
-                useEzan && hasBundledEzan(context) ->
-                    ezanSoundUri(context) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-            }
+            val ezan = if (useEzan) ezanSoundUri(context) else null
             PrayerAlarmPlaybackService.startPlayback(
                 context,
-                uri,
+                ezan ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
                 context.getString(R.string.notification_prayer_started_title, displayName),
                 "",
-                isDebugTest = notificationIdOverride != null
+                isDebugTest = notificationIdOverride != null,
+                loop = ezan == null
             )
             return
         }

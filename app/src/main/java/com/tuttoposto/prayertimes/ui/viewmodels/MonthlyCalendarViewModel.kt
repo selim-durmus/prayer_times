@@ -55,7 +55,7 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
                 DayPrayerTimes(
                     day.date.dayOfMonth, day.date.format(DateTimeFormatter.ofPattern("d MMM")),
                     day.hijriDate, time("Fajr"), time("Dhuhr"), time("Asr"), time("Maghrib"), time("Isha"),
-                    day.date == LocalDate.now()
+                    day.date == LocalDate.now(), day.date
                 )
             }
             if (saved != null && !forceRefresh) {
@@ -85,6 +85,10 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
                 }
 
                 val days = response.data.map { dayData ->
+                    val date = runCatching {
+                        LocalDate.of(dayData.date.gregorian.year.toInt(), dayData.date.gregorian.month.number,
+                            dayData.date.gregorian.day.toInt())
+                    }.getOrNull()
                     DayPrayerTimes(
                         dayOfMonth = dayData.date.gregorian.day.toIntOrNull() ?: 0,
                         dateLabel = "${dayData.date.gregorian.day} ${dayData.date.gregorian.month.en.take(3)}",
@@ -94,7 +98,8 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
                         asr = cleanTime(dayData.timings.asr),
                         maghrib = cleanTime(dayData.timings.maghrib),
                         isha = cleanTime(dayData.timings.isha),
-                        isToday = isToday(dayData)
+                        isToday = isToday(dayData),
+                        date = date
                     )
                 }
 
@@ -115,6 +120,10 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
 
     fun goToNextMonth() {
         loadMonth(_currentMonth.value.plusMonths(1))
+    }
+
+    fun goToToday() {
+        loadMonth(YearMonth.now())
     }
 
     private fun cleanTime(raw: String): String = raw.split(" ")[0].trim()
@@ -156,5 +165,6 @@ data class DayPrayerTimes(
     val asr: String,
     val maghrib: String,
     val isha: String,
-    val isToday: Boolean
+    val isToday: Boolean,
+    val date: LocalDate? = null
 )

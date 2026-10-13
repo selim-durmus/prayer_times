@@ -139,17 +139,9 @@ fun TasbihatScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 20.dp, vertical = 24.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = "Tasbihat",
-            style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.primary,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
         VakitSelector(selected = selectedVakit, onSelect = { userSelectedName = it.name })
 
         Spacer(modifier = Modifier.height(10.dp))

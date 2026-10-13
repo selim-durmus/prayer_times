@@ -122,3 +122,6 @@ object PrayerTimesColors {
     val cardBackground: Color
         @Composable get() = MaterialTheme.colorScheme.surface
 }
+
+/** Fixed-width digits so ticking times and countdowns don't jitter. */
+val TabularNumbers = androidx.compose.ui.text.TextStyle(fontFeatureSettings = "tnum")

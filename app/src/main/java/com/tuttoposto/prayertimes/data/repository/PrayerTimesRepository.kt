@@ -164,11 +164,16 @@ class PrayerTimesRepository internal constructor(
 
     suspend fun getSchedulingDays(): List<PrayerTimesCache> {
         val zone = ZoneId.systemDefault()
-        val today = LocalDate.now(zone)
-        val days = sourceDaysFlow.first()
-        // Include yesterday's Isha if its end reminder is still in the future.
-        return (-1L..1L).mapNotNull { PrayerCachePolicy.resolve(days, today.plusDays(it), zone) }
+        return schedulingDays(sourceDaysFlow.first(), LocalDate.now(zone), zone)
     }
+
+    /** Yesterday, today and tomorrow, re-resolved when the saved days or the local date change. */
+    val schedulingDaysFlow: Flow<List<PrayerTimesCache>> =
+        combine(sourceDaysFlow, localDayFlow) { days, (date, zone) -> schedulingDays(days, date, zone) }
+
+    // Include yesterday's Isha if its end reminder is still in the future.
+    private fun schedulingDays(days: List<PrayerTimesCache>, today: LocalDate, zone: ZoneId) =
+        (-1L..1L).mapNotNull { PrayerCachePolicy.resolve(days, today.plusDays(it), zone) }
 
     suspend fun isCacheValid(): Boolean = getCachedPrayerTimes()?.isFallback == false
 

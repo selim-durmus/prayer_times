@@ -64,7 +64,7 @@ object AlarmReadiness {
             add(ReadinessCheck("Notifications", if (notifications) "Allowed" else "Blocked by Android", !notifications,
                 ReadinessAction.NOTIFICATIONS))
             val exact = context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
-            add(ReadinessCheck("Exact alarms", if (exact) "Allowed" else "Allow precise reminder times", !exact,
+            add(ReadinessCheck("Exact alarms", if (exact) "Allowed" else "Allow precise reminder times and an up-to-date widget countdown", !exact,
                 ReadinessAction.EXACT_ALARMS))
             if (fajrScreen) {
                 val allowed = manager.canUseFullScreenIntent()

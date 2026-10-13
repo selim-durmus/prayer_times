@@ -48,7 +48,9 @@ class PrayerScheduleCoordinator(context: Context) {
             val nextMidnight = java.time.LocalDate.now().plusDays(1)
                 .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
             SyncLogRepository(context).setNextMidnightSync(nextMidnight)
-            if (WidgetUpdateHelper.hasActiveWidgets(context)) WidgetUpdateHelper.updateAllWidgets(context)
+            // Also re-arms the widget minute tick (lost on reboot, app update or force-stop).
+            try { WidgetUpdateHelper.refresh(context) }
+            catch (e: Exception) { android.util.Log.e("PrayerSchedule", "Could not refresh widgets", e) }
             schedule
         }
     }
