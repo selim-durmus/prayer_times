@@ -109,6 +109,9 @@ private fun TodayContent(state: PrayerTimesUiState.Success, viewModel: PrayerTim
         state.fallbackMessage?.let { message ->
             item(key = "fallback") { Banner(Icons.Outlined.CloudOff, message) }
         }
+        state.asrNote?.let { note ->
+            item(key = "asr") { Banner(Icons.Outlined.Info, note) }
+        }
         item(key = "list") { PrayerList(state.prayers) }
         item(key = "footer") {
             Text(

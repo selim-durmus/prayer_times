@@ -40,14 +40,14 @@
             android:maxLines="1" />
     </LinearLayout>
 
-    <!-- Fills the remaining height; auto-sizes so long values never ellipsize -->
-    <TextView
+    <!-- Live H:MM:SS countdown ticked by the launcher itself; auto-sizes to the widget -->
+    <Chronometer
         android:id="@+id/widget_countdown"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center_vertical|start"
-        android:text="2h 15m"
+        android:countDown="true"
         android:textColor="#F2F2F2"
         android:textSize="28sp"
         android:fontFamily="sans-serif-medium"
@@ -57,6 +57,20 @@
         android:autoSizeMinTextSize="14sp"
         android:autoSizeMaxTextSize="34sp"
         android:autoSizeStepGranularity="1sp" />
+
+    <!-- Shown instead of the countdown when no prayer times are saved -->
+    <TextView
+        android:id="@+id/widget_status"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical|start"
+        android:text="Open app"
+        android:textColor="#F2F2F2"
+        android:textSize="18sp"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1"
+        android:visibility="gone" />
 
     <ProgressBar
         android:id="@+id/widget_progress"

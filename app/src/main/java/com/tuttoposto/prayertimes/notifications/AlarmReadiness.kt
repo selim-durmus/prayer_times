@@ -11,7 +11,7 @@ import com.tuttoposto.prayertimes.data.models.NotificationStyle
 import com.tuttoposto.prayertimes.data.models.Prayer
 import com.tuttoposto.prayertimes.data.models.ReminderSound
 
-enum class ReadinessAction { NOTIFICATIONS, EXACT_ALARMS, FULL_SCREEN, CHANNEL, SOUND, MODES, APP_SETTINGS }
+enum class ReadinessAction { NOTIFICATIONS, EXACT_ALARMS, FULL_SCREEN, CHANNEL, SOUND, MODES, APP_SETTINGS, BATTERY }
 
 data class ReadinessCheck(
     val label: String,
@@ -129,8 +129,10 @@ object AlarmReadiness {
                 else -> "Active — check which alarms and notifications are allowed"
             }, enabled && modes, ReadinessAction.MODES))
             val unrestricted = context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
-            add(ReadinessCheck("Battery", if (unrestricted) "Optimization exemption enabled" else "Optimized — review if background refresh is delayed",
-                action = ReadinessAction.APP_SETTINGS))
+            add(ReadinessCheck("Battery",
+                if (unrestricted) "Unrestricted · reminders don't appear as clock alarms"
+                else "Optimized · reminders use clock alarms (alarm icon) to stay on time. Allow unrestricted to avoid that.",
+                action = if (unrestricted) ReadinessAction.APP_SETTINGS else ReadinessAction.BATTERY))
         }
     }
 }

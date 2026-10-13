@@ -11,6 +11,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.tuttoposto.prayertimes.data.api.AladhanApi
 import com.tuttoposto.prayertimes.data.api.AladhanTimings
 import com.tuttoposto.prayertimes.data.api.NetworkModule
+import com.tuttoposto.prayertimes.data.models.AsrSchool
 import com.tuttoposto.prayertimes.data.models.Prayer
 import com.tuttoposto.prayertimes.data.models.PrayerTime
 import com.tuttoposto.prayertimes.data.models.PrayerTimesCache
@@ -177,8 +178,8 @@ class PrayerTimesRepository internal constructor(
 
     suspend fun isCacheValid(): Boolean = getCachedPrayerTimes()?.isFallback == false
 
-    suspend fun needsRefresh(): Boolean =
-        PrayerCachePolicy.needsRefresh(sourceDaysFlow.first(), LocalDate.now(), ZoneId.systemDefault())
+    suspend fun needsRefresh(asrSchool: AsrSchool = AsrSchool.HANAFI): Boolean =
+        PrayerCachePolicy.needsRefresh(sourceDaysFlow.first(), LocalDate.now(), ZoneId.systemDefault(), asrSchool)
 
     /**
      * Download current and next month. Persist each successful month immediately, so a
@@ -187,13 +188,15 @@ class PrayerTimesRepository internal constructor(
     suspend fun fetchAndCachePrayerTimes(
         latitude: Double,
         longitude: Double,
+        asrSchool: AsrSchool = AsrSchool.HANAFI,
         onCacheUpdated: suspend () -> Unit = {}
     ): Result<PrayerTimesCache> = refreshMutex.withLock {
         try {
             val today = LocalDate.now()
             val currentMonth = YearMonth.from(today)
             for (month in listOf(currentMonth, currentMonth.plusMonths(1))) {
-                val response = api.getCalendar(month.year, month.monthValue, latitude, longitude)
+                val response = api.getCalendar(month.year, month.monthValue, latitude, longitude,
+                    school = asrSchool.apiValue)
                 check(response.code == 200) { "API error: ${response.status}" }
                 val fetchedAt = System.currentTimeMillis()
                 val days = response.data.map { data ->
@@ -210,7 +213,8 @@ class PrayerTimesRepository internal constructor(
                         longitude = longitude,
                         prayers = prayers,
                         hijriDate = data.date.hijri?.formatted(),
-                        fetchedAtMillis = fetchedAt
+                        fetchedAtMillis = fetchedAt,
+                        asrSchool = asrSchool.apiValue
                     )
                 }
                 check(days.map { it.date }.toSet().size == month.lengthOfMonth()) { "Incomplete calendar for $month" }
@@ -228,9 +232,10 @@ class PrayerTimesRepository internal constructor(
     private suspend fun saveDays(incoming: List<PrayerTimesCache>) {
         dataStore.edit { prefs ->
             val first = incoming.first()
-            // Never mix future days from two different locations.
+            // Never mix future days from two different locations or Asr schools.
             val previous = readDays(prefs).filter {
-                it.latitude == first.latitude && it.longitude == first.longitude && it.timezoneId == first.timezoneId
+                it.latitude == first.latitude && it.longitude == first.longitude &&
+                    it.timezoneId == first.timezoneId && it.asrSchool == first.asrSchool
             }
             val merged = (previous + incoming).associateBy { it.date }.values.sortedBy { it.date }
             val oldest = LocalDate.now().withDayOfMonth(1).minusDays(1)

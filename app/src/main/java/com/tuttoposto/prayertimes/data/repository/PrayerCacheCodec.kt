@@ -17,7 +17,8 @@ data class StoredPrayerDay(
     val longitude: Double,
     val prayers: List<PrayerTime>,
     val hijriDate: String?,
-    val fetchedAtMillis: Long = 0
+    val fetchedAtMillis: Long = 0,
+    val asrSchool: Int = 1
 )
 
 /** Only API/legacy source days are persisted; projected fallback dates never are. */
@@ -29,7 +30,7 @@ object PrayerCacheCodec {
         require(days.none { it.isFallback })
         return adapter.toJson(days.map {
             StoredPrayerDay(it.date.toString(), it.timezoneId, it.latitude, it.longitude,
-                it.prayers, it.hijriDate, it.fetchedAtMillis)
+                it.prayers, it.hijriDate, it.fetchedAtMillis, it.asrSchool)
         })
     }
 
@@ -37,6 +38,6 @@ object PrayerCacheCodec {
         ZoneId.of(it.timezoneId)
         require(it.prayers.size == 5 && it.prayers.all { prayer -> prayer.endTimeMillis > prayer.startTimeMillis })
         PrayerTimesCache(LocalDate.parse(it.date), it.timezoneId, it.latitude, it.longitude,
-            it.prayers, it.hijriDate, fetchedAtMillis = it.fetchedAtMillis)
+            it.prayers, it.hijriDate, fetchedAtMillis = it.fetchedAtMillis, asrSchool = it.asrSchool)
     }
 }

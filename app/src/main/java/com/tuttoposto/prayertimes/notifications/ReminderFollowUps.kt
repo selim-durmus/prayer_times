@@ -55,16 +55,9 @@ object ReminderFollowUps {
     }
 
     private fun schedule(context: Context, item: ReminderFollowUp, now: Long) {
-        val alarm = context.getSystemService(AlarmManager::class.java)
         val at = maxOf(requireNotNull(item.atMillis), now + 500)
         val operation = alarmIntent(context, item.prayer, item.token, item.isTest)
-        if (alarm.canScheduleExactAlarms()) {
-            val open = PendingIntent.getActivity(context, 30_100 + item.prayer.ordinal + if (item.isTest) 500 else 0,
-                Intent(context, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            alarm.setAlarmClock(AlarmManager.AlarmClockInfo(at, open), operation)
-        } else {
-            alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, operation)
-        }
+        PrayerAlarmDelivery.schedule(context, at, operation, 30_100 + item.prayer.ordinal + if (item.isTest) 500 else 0)
     }
 
     /** Shared before-end reminders and isolated debug samples; each alert invalidates its old actions. */

@@ -79,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tuttoposto.prayertimes.data.models.NotificationEventType
 import com.tuttoposto.prayertimes.data.models.NotificationLogEntry
+import com.tuttoposto.prayertimes.data.models.AsrSchool
 import com.tuttoposto.prayertimes.data.models.NotificationStyle
 import com.tuttoposto.prayertimes.data.models.ReminderSound
 import com.tuttoposto.prayertimes.R
@@ -190,7 +191,8 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
         ExpandableSectionCard(title = "Appearance & calculation",
-            summary = if (uiState.useAmoledTheme) "AMOLED black · ISNA / Hanafi" else "Dark theme · ISNA / Hanafi") {
+            summary = (if (uiState.useAmoledTheme) "AMOLED black" else "Dark theme") +
+                " · ISNA · Asr ${uiState.asrSchool.label}") {
             SettingsToggleRow(
                 title = "AMOLED black theme",
                 subtitle = "Pure black background for OLED screens",
@@ -198,7 +200,7 @@ fun SettingsScreen(
                 onCheckedChange = viewModel::setUseAmoledTheme
             )
             HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(vertical = 12.dp))
-            CalculationInfoSection()
+            CalculationInfoSection(uiState, viewModel::setAsrSchool)
         }
         
         // Debug actions first; diagnostics stay compact until needed.
@@ -496,53 +498,60 @@ private fun FajrSkipControls(state: SettingsUiState, onSkip: () -> Unit, onUndo:
 }
 
 @Composable
-private fun CalculationInfoSection() {
+private fun CalculationInfoSection(state: SettingsUiState, onAsrSchool: (AsrSchool) -> Unit) {
     Column {
-        Text(
-            text = "Calculation Method",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = "Method",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "ISNA",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text("Calculation method", style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface)
+            Text("ISNA", style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "School",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "Hanafi",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        
         Text(
-            text = "Islamic Society of North America (ISNA) angles with Hanafi juristic method for Asr calculation.",
+            "Islamic Society of North America angles for Fajr and Isha.",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.padding(top = 8.dp)
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp)
         )
+        Text("Asr time", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+        Text(
+            "Only Asr changes (and with it, when Dhuhr ends).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Column(Modifier.selectableGroup()) {
+            AsrSchool.entries.forEach { school ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .selectable(selected = state.asrSchool == school, role = Role.RadioButton) { onAsrSchool(school) }
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(selected = state.asrSchool == school, onClick = null)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(school.label, style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface)
+                        Text(school.detail, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        if (state.asrTimesPending) {
+            Text(
+                "Updating Asr times… Saved times keep the previous Asr until the download succeeds " +
+                    "(needs internet).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
     }
 }
 

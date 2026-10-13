@@ -53,7 +53,11 @@ internal fun AlarmReadinessSection(checks: List<ReadinessCheck>) {
                             color = if (check.needsAttention) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (check.action != null) TextButton(onClick = { openReadinessSettings(context, check) }) {
-                        Text(if (check.needsAttention) "Review" else "Open")
+                        Text(when {
+                            check.action == ReadinessAction.BATTERY -> "Allow"
+                            check.needsAttention -> "Review"
+                            else -> "Open"
+                        })
                     }
                 }
             }
@@ -73,6 +77,7 @@ internal fun openReadinessSettings(context: Context, check: ReadinessCheck) {
             .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName).putExtra(Settings.EXTRA_CHANNEL_ID, check.channelId)
         ReadinessAction.SOUND -> Intent(Settings.ACTION_SOUND_SETTINGS)
         ReadinessAction.MODES -> Intent(Settings.ACTION_ZEN_MODE_PRIORITY_SETTINGS)
+        ReadinessAction.BATTERY -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
         else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
     }
     try { context.startActivity(intent) }

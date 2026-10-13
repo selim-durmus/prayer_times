@@ -13,6 +13,10 @@ import com.tuttoposto.prayertimes.data.models.PrayerTimeline
 import com.tuttoposto.prayertimes.data.models.PrayerTimesCache
 import com.tuttoposto.prayertimes.data.models.SyncSource
 import com.tuttoposto.prayertimes.data.repository.PrayerTimesRepository
+import com.tuttoposto.prayertimes.data.repository.SettingsRepository
+import com.tuttoposto.prayertimes.data.models.AsrSchool
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import com.tuttoposto.prayertimes.notifications.PrayerScheduleCoordinator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -51,6 +55,7 @@ class PrayerTimesViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private val repository = PrayerTimesRepository(application)
+    private val settingsRepository = SettingsRepository(application)
 
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
@@ -76,14 +81,18 @@ class PrayerTimesViewModel(application: Application) : AndroidViewModel(applicat
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), System.currentTimeMillis())
 
     val uiState: StateFlow<PrayerTimesUiState> =
-        combine(repository.schedulingDaysFlow, minuteTicks, locationName) { days, now, place ->
-            buildState(days, now, place)
+        combine(
+            repository.schedulingDaysFlow, minuteTicks, locationName,
+            settingsRepository.settingsFlow.map { it.asrSchool }.distinctUntilChanged()
+        ) { days, now, place, asrSchool ->
+            buildState(days, now, place, asrSchool)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PrayerTimesUiState.Loading)
 
     private fun buildState(
         days: List<PrayerTimesCache>,
         now: Long,
-        place: Pair<Pair<Double, Double>, String>?
+        place: Pair<Pair<Double, Double>, String>?,
+        asrSchool: AsrSchool
     ): PrayerTimesUiState {
         val zone = ZoneId.systemDefault()
         val today = days.firstOrNull { it.date == LocalDate.now(zone) } ?: days.lastOrNull()
@@ -111,6 +120,10 @@ class PrayerTimesViewModel(application: Application) : AndroidViewModel(applicat
                 "Showing saved times from ${today.sourceDate.format(DateTimeFormatter.ofPattern("MMM d"))}" +
                     (if (today.sourceTimezoneId != today.timezoneId) " (${today.sourceTimezoneId})" else "") +
                     ". Today's times may differ by a few minutes; reminders use these times until the next refresh."
+            } else null,
+            asrNote = if (today.asrSchool != asrSchool.apiValue) {
+                "Asr still uses the ${AsrSchool.fromApiValue(today.asrSchool).label} time. " +
+                    "It switches to ${asrSchool.label} after the next download; pull down to refresh."
             } else null
         )
     }
@@ -210,7 +223,8 @@ sealed class PrayerTimesUiState {
         val countdown: PrayerCountdown? = null,
         val savedThrough: String = "",
         val downloaded: String = "",
-        val fallbackMessage: String? = null
+        val fallbackMessage: String? = null,
+        val asrNote: String? = null
     ) : PrayerTimesUiState()
 }
 

@@ -25,6 +25,10 @@
     
     <!-- Wake lock for ensuring device wakes for notifications -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Lets Alarm readiness offer the system "allow unrestricted battery" dialog. When allowed,
+         reminders use plain exact alarms instead of clock alarms (see PrayerAlarmDelivery). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     
     <!-- Receive boot completed to reschedule alarms after device restart -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -117,6 +121,7 @@
         <!-- 2x1 home screen widget: prayer name, time, countdown, progress bar -->
         <receiver
             android:name=".widget.PrayerWidgetProvider"
+            android:label="@string/widget_name"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -129,6 +134,7 @@
         <!-- 1x1 compact home screen widget: prayer name and countdown -->
         <receiver
             android:name=".widget.PrayerWidgetSmallProvider"
+            android:label="@string/widget_small_name"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />

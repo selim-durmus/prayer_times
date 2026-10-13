@@ -7,7 +7,9 @@ import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.util.Log
+import android.view.View
 import android.widget.RemoteViews
 import com.tuttoposto.prayertimes.R
 import com.tuttoposto.prayertimes.data.models.PrayerCountdown
@@ -25,8 +27,9 @@ import java.time.format.DateTimeFormatter
 /**
  * Renders both widgets and keeps their countdown in step with the clock.
  *
- * The countdown has minute resolution, so the widgets are redrawn on every wall-clock minute
- * boundary with an exact, non-wakeup alarm. Non-wakeup means no battery cost while the screen
+ * The seconds countdown is a Chronometer the launcher ticks by itself. The widgets are also
+ * redrawn on every wall-clock minute boundary with an exact, non-wakeup alarm, which moves the
+ * progress bar and switches to the next prayer when a countdown reaches zero. Non-wakeup means no battery cost while the screen
  * is off: Android holds the alarm and delivers it the moment the screen turns on, so the widget
  * is current when it is looked at. (The previous inexact 60 s alarm could be deferred by up to
  * ten minutes on Android 12+, which is why the widget lagged until the app was opened.)
@@ -93,7 +96,7 @@ object WidgetUpdateHelper {
             val views = RemoteViews(context.packageName, R.layout.widget_prayer_times)
             views.setTextViewText(R.id.widget_prayer_info, label ?: "Prayer times")
             views.setTextViewText(R.id.widget_prayer_time, time ?: "—")
-            views.setTextViewText(R.id.widget_countdown, remaining ?: "Open app")
+            views.showCountdown(R.id.widget_countdown, R.id.widget_status, countdown, now)
             views.setProgressBar(R.id.widget_progress, 1000,
                 countdown?.let { (it.progress(now) * 1000).toInt() } ?: 0, false)
             views.setContentDescription(R.id.widget_root, description)
@@ -103,11 +106,30 @@ object WidgetUpdateHelper {
         for (id in manager.getAppWidgetIds(ComponentName(context, PrayerWidgetSmallProvider::class.java))) {
             val views = RemoteViews(context.packageName, R.layout.widget_prayer_times_small)
             views.setTextViewText(R.id.widget_small_prayer_name, label ?: "—")
-            views.setTextViewText(R.id.widget_small_countdown, remaining ?: "Open app")
+            views.showCountdown(R.id.widget_small_countdown, R.id.widget_small_status, countdown, now)
             views.setContentDescription(R.id.widget_small_root, description)
             views.setOnClickPendingIntent(R.id.widget_small_root, openAppIntent(context, 1))
             manager.updateAppWidget(id, views)
         }
+    }
+
+    /**
+     * The launcher ticks the Chronometer every second on its own, so the seconds countdown stays
+     * exact between our minute redraws. Its base is in the elapsed-realtime clock shared by all
+     * processes. Prayer times fall on whole minutes, so the minute tick swaps to the next prayer
+     * the moment this reaches zero.
+     */
+    private fun RemoteViews.showCountdown(chronometerId: Int, statusId: Int, countdown: PrayerCountdown?, now: Long) {
+        if (countdown == null) {
+            setChronometer(chronometerId, SystemClock.elapsedRealtime(), null, false)
+            setViewVisibility(chronometerId, View.GONE)
+            setViewVisibility(statusId, View.VISIBLE)
+            return
+        }
+        setChronometerCountDown(chronometerId, true)
+        setChronometer(chronometerId, SystemClock.elapsedRealtime() + countdown.remainingMillis(now), null, true)
+        setViewVisibility(chronometerId, View.VISIBLE)
+        setViewVisibility(statusId, View.GONE)
     }
 
     private fun openAppIntent(context: Context, requestCode: Int): PendingIntent =

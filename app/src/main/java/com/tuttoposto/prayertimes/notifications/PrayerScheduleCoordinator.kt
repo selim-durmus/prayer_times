@@ -62,6 +62,7 @@ class PrayerScheduleCoordinator(context: Context) {
     ): Result<Unit> {
         var count = 0
         var coordinates: Pair<Double, Double>? = null
+        val asrSchool = SettingsRepository(context).getSettings().asrSchool
         val result = CacheFirstRefresh.run(
             schedule = {
                 val schedule = scheduleFromCache()
@@ -76,14 +77,14 @@ class PrayerScheduleCoordinator(context: Context) {
                     saved != null && (kotlin.math.abs(saved.latitude - it.first) > 0.05 ||
                         kotlin.math.abs(saved.longitude - it.second) > 0.05)
                 } ?: false
-                force || moved || repository.needsRefresh()
+                force || moved || repository.needsRefresh(asrSchool)
             },
             refresh = {
                 val target = coordinates
                 if (target == null) {
                     Result.failure(IllegalStateException("No location or saved prayer times"))
                 } else {
-                    repository.fetchAndCachePrayerTimes(target.first, target.second) {
+                    repository.fetchAndCachePrayerTimes(target.first, target.second, asrSchool) {
                         scheduleFromCache()
                     }.map { Unit }
                 }

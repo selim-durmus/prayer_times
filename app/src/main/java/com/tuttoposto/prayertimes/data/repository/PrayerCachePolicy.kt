@@ -1,5 +1,6 @@
 package com.tuttoposto.prayertimes.data.repository
 
+import com.tuttoposto.prayertimes.data.models.AsrSchool
 import com.tuttoposto.prayertimes.data.models.PrayerTimesCache
 import java.time.Instant
 import java.time.LocalDate
@@ -38,9 +39,15 @@ object PrayerCachePolicy {
         )
     }
 
-    fun needsRefresh(days: List<PrayerTimesCache>, today: LocalDate, zone: ZoneId): Boolean =
+    fun needsRefresh(
+        days: List<PrayerTimesCache>, today: LocalDate, zone: ZoneId,
+        asrSchool: AsrSchool = AsrSchool.HANAFI
+    ): Boolean =
         (0L..14L).any { offset ->
-            days.none { it.date == today.plusDays(offset) && sameClock(it.timezoneId, zone, it.date) }
+            days.none {
+                it.date == today.plusDays(offset) && sameClock(it.timezoneId, zone, it.date) &&
+                    it.asrSchool == asrSchool.apiValue
+            }
         }
 
     /**

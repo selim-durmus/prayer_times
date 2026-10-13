@@ -26,6 +26,14 @@
 > countdown card. Alarm-like playback now loops alarm tones (Ringtone plays once by default);
 > Ezan plays once and then ends the session. The unused `data/model`, `data/local` and
 > `data/remote` packages were removed.
+>
+> Follow-up: widgets show a launcher-ticked `Chronometer` (H:MM:SS); the minute tick still
+> moves the progress bar and switches prayers. `PrayerAlarmDelivery` picks how prayer alarms are
+> scheduled: plain `setExactAndAllowWhileIdle` when the app is battery-unrestricted (exempt from
+> App Standby alarm caps, no alarm icon / lock-screen "next alarm"), otherwise `setAlarmClock`
+> (always exempt), or inexact without exact-alarm access. Asr school (Hanafi = Aladhan school 1,
+> default; Shafi'i = 0) is a setting; each saved day records its school, a mismatch triggers a
+> re-download, and days of different schools are never merged.
 
 This document summarizes the **Prayer Times** Android application (`com.tuttoposto.prayertimes`): purpose, stack, architecture, file layout, data/UI layers, design choices, constraints, and dependency versions. It is intended to onboard a reader (or an AI session) with **no prior exposure** to the repo.
 

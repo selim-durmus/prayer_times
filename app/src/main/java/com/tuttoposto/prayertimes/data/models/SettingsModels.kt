@@ -11,6 +11,19 @@ enum class NotificationStyle {
 
 enum class ReminderSound { EZAN, ALARM, NOTIFICATION }
 
+/**
+ * Juristic method for Asr; it changes only the Asr start (and so the Dhuhr end).
+ * [apiValue] is Aladhan's `school` parameter.
+ */
+enum class AsrSchool(val apiValue: Int, val label: String, val detail: String) {
+    HANAFI(1, "Hanafi", "Later Asr (Asr-ı sânî): shadow twice an object's length"),
+    SHAFII(0, "Shafi'i", "Earlier Asr (Asr-ı evvel): shadow equal to an object's length; also Maliki and Hanbali");
+
+    companion object {
+        fun fromApiValue(value: Int): AsrSchool = entries.firstOrNull { it.apiValue == value } ?: HANAFI
+    }
+}
+
 data class FajrWakeUpSettings(
     val enabled: Boolean = false,
     val minutesBeforeSunrise: Int = 15,
@@ -128,7 +141,8 @@ data class AppSettings(
     val debugModeEnabled: Boolean = false, // Hidden by default
     val useAmoledTheme: Boolean = false,
     val fajrWakeUp: FajrWakeUpSettings = FajrWakeUpSettings(),
-    val fajrWakeSkip: FajrWakeSkip? = null
+    val fajrWakeSkip: FajrWakeSkip? = null,
+    val asrSchool: AsrSchool = AsrSchool.HANAFI
 ) {
     fun reminderOffsetFor(prayer: Prayer): Int =
         if (prayer == Prayer.FAJR && fajrWakeUp.enabled) fajrWakeUp.minutesBeforeSunrise else reminderOffsetMinutes
