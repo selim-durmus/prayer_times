@@ -4,6 +4,22 @@ import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.semantics.heading
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -63,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tuttoposto.prayertimes.data.models.NotificationEventType
 import com.tuttoposto.prayertimes.data.models.NotificationLogEntry
+import com.tuttoposto.prayertimes.data.models.AsrSchool
 import com.tuttoposto.prayertimes.data.models.NotificationStyle
 import com.tuttoposto.prayertimes.data.models.ReminderSound
 import com.tuttoposto.prayertimes.R
@@ -104,44 +121,34 @@ fun SettingsScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 24.dp),
+            .padding(horizontal = 16.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Header - Long press for 3 seconds to toggle debug mode
+        // Header - hold for 3 seconds to toggle developer tools
         Text(
             text = "Settings",
-            style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.primary,
-            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 24.dp)
+                .padding(start = 4.dp, top = 8.dp, bottom = 16.dp)
                 .pointerInput(Unit) {
                     detectTapGestures(
-                        onLongPress = {
-                            // This triggers after ~500ms, but we want 3 seconds
-                            // The actual delay is handled inside
-                        },
                         onPress = {
-                            // Start timing when press begins
                             val startTime = System.currentTimeMillis()
-                            val wasReleased = tryAwaitRelease()
-                            val pressDuration = System.currentTimeMillis() - startTime
-                            
-                            // If held for 3+ seconds, toggle debug mode
-                            if (pressDuration >= 3000) {
+                            tryAwaitRelease()
+                            if (System.currentTimeMillis() - startTime >= 3000) {
+                                val enabling = !uiState.debugModeEnabled
                                 viewModel.toggleDebugMode()
-                                val message = if (uiState.debugModeEnabled) 
-                                    "Debug mode disabled" 
-                                else 
-                                    "Debug mode enabled"
-                                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context,
+                                    if (enabling) "Developer tools enabled" else "Developer tools hidden",
+                                    Toast.LENGTH_SHORT).show()
                             }
                         }
                     )
                 }
         )
-        
+
         FajrWakeUpSection(
             state = uiState,
             onPrayerEnabled = { viewModel.setPrayerEnabled("FAJR", it) },
@@ -184,7 +191,8 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
         ExpandableSectionCard(title = "Appearance & calculation",
-            summary = if (uiState.useAmoledTheme) "AMOLED black · ISNA / Hanafi" else "Dark theme · ISNA / Hanafi") {
+            summary = (if (uiState.useAmoledTheme) "AMOLED black" else "Dark theme") +
+                " · ISNA · Asr ${uiState.asrSchool.label}") {
             SettingsToggleRow(
                 title = "AMOLED black theme",
                 subtitle = "Pure black background for OLED screens",
@@ -192,7 +200,7 @@ fun SettingsScreen(
                 onCheckedChange = viewModel::setUseAmoledTheme
             )
             HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(vertical = 12.dp))
-            CalculationInfoSection()
+            CalculationInfoSection(uiState, viewModel::setAsrSchool)
         }
         
         // Debug actions first; diagnostics stay compact until needed.
@@ -375,17 +383,18 @@ private fun FajrWakeUpSection(
                 Text("Wake-up sound", style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(8.dp))
                 // Full-width options remain readable at larger font sizes.
-                ReminderSound.entries.forEach { sound ->
-                    StyleButton(
-                        text = when (sound) {
-                            ReminderSound.EZAN -> "Ezan"
-                            ReminderSound.ALARM -> "Alarm sound"
-                            ReminderSound.NOTIFICATION -> "Notification sound"
-                        },
-                        selected = wake.sound == sound,
-                        onClick = { onSound(sound) },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
-                    )
+                Column(Modifier.selectableGroup()) {
+                    ReminderSound.entries.forEach { sound ->
+                        ChoiceRow(
+                            text = when (sound) {
+                                ReminderSound.EZAN -> "Ezan"
+                                ReminderSound.ALARM -> "Alarm sound"
+                                ReminderSound.NOTIFICATION -> "Notification sound"
+                            },
+                            selected = wake.sound == sound,
+                            onClick = { onSound(sound) }
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 NotificationStyleBlock(
@@ -489,53 +498,60 @@ private fun FajrSkipControls(state: SettingsUiState, onSkip: () -> Unit, onUndo:
 }
 
 @Composable
-private fun CalculationInfoSection() {
+private fun CalculationInfoSection(state: SettingsUiState, onAsrSchool: (AsrSchool) -> Unit) {
     Column {
-        Text(
-            text = "Calculation Method",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = "Method",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "ISNA",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text("Calculation method", style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface)
+            Text("ISNA", style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "School",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "Hanafi",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        
         Text(
-            text = "Islamic Society of North America (ISNA) angles with Hanafi juristic method for Asr calculation.",
+            "Islamic Society of North America angles for Fajr and Isha.",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.padding(top = 8.dp)
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 12.dp)
         )
+        Text("Asr time", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+        Text(
+            "Only Asr changes (and with it, when Dhuhr ends).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
+        Column(Modifier.selectableGroup()) {
+            AsrSchool.entries.forEach { school ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .selectable(selected = state.asrSchool == school, role = Role.RadioButton) { onAsrSchool(school) }
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(selected = state.asrSchool == school, onClick = null)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(school.label, style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface)
+                        Text(school.detail, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        if (state.asrTimesPending) {
+            Text(
+                "Updating Asr times… Saved times keep the previous Asr until the download succeeds " +
+                    "(needs internet).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
     }
 }
 
@@ -895,7 +911,7 @@ private fun ReminderOffsetSlider(
     
     Column {
         Text(
-            text = "Reminder Offset",
+            text = "Reminder offset",
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -929,7 +945,9 @@ private fun ReminderOffsetSlider(
                 colors = SliderDefaults.colors(
                     thumbColor = MaterialTheme.colorScheme.primary,
                     activeTrackColor = MaterialTheme.colorScheme.primary,
-                    inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                    inactiveTrackColor = MaterialTheme.colorScheme.outline,
+                    activeTickColor = MaterialTheme.colorScheme.onPrimary,
+                    inactiveTickColor = MaterialTheme.colorScheme.primary
                 )
             )
             
@@ -942,45 +960,45 @@ private fun ReminderOffsetSlider(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NotificationStyleBlock(
     title: String,
     currentStyle: NotificationStyle,
     onStyleChange: (NotificationStyle) -> Unit
 ) {
-    Column {
+    Column(Modifier.padding(vertical = 4.dp)) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(bottom = 12.dp)
+            modifier = Modifier.padding(bottom = 10.dp)
         )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StyleButton(
-                text = stringResource(R.string.settings_style_normal),
-                selected = currentStyle == NotificationStyle.NORMAL,
-                onClick = { onStyleChange(NotificationStyle.NORMAL) },
-                modifier = Modifier.weight(1f)
-            )
-
-            StyleButton(
-                text = stringResource(R.string.settings_style_alarm),
-                selected = currentStyle == NotificationStyle.ALARMY,
-                onClick = { onStyleChange(NotificationStyle.ALARMY) },
-                modifier = Modifier.weight(1f)
-            )
+        val options = listOf(
+            NotificationStyle.NORMAL to stringResource(R.string.settings_style_normal),
+            NotificationStyle.ALARMY to stringResource(R.string.settings_style_alarm)
+        )
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            options.forEachIndexed { index, (style, label) ->
+                SegmentedButton(
+                    selected = currentStyle == style,
+                    onClick = { onStyleChange(style) },
+                    shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                        activeContentColor = MaterialTheme.colorScheme.primary,
+                        activeBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                        inactiveContainerColor = MaterialTheme.colorScheme.surface,
+                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        inactiveBorderColor = MaterialTheme.colorScheme.outline
+                    )
+                ) { Text(label) }
+            }
         }
-        
         Text(
             text = when (currentStyle) {
-                NotificationStyle.NORMAL ->
-                    stringResource(R.string.settings_style_normal_desc)
-                NotificationStyle.ALARMY ->
-                    stringResource(R.string.settings_style_alarm_desc)
+                NotificationStyle.NORMAL -> stringResource(R.string.settings_style_normal_desc)
+                NotificationStyle.ALARMY -> stringResource(R.string.settings_style_alarm_desc)
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -990,28 +1008,19 @@ private fun NotificationStyleBlock(
 }
 
 @Composable
-private fun StyleButton(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Button(
-        onClick = onClick,
-        modifier = modifier,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (selected) 
-                MaterialTheme.colorScheme.primary 
-            else 
-                MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = if (selected) 
-                MaterialTheme.colorScheme.onPrimary 
-            else 
-                MaterialTheme.colorScheme.onSurfaceVariant
-        ),
-        shape = RoundedCornerShape(12.dp)
+private fun ChoiceRow(text: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .selectable(selected = selected, onClick = onClick, role = Role.RadioButton)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = text)
+        RadioButton(selected = selected, onClick = null)
+        Spacer(Modifier.width(12.dp))
+        Text(text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -1149,10 +1158,10 @@ private fun TestingSection(
 private fun ExpandableSectionCard(title: String, summary: String, content: @Composable () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = PrayerTimesColors.cardBackground)
     ) {
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
             SettingsDisclosure(title, summary, content = content)
         }
     }
@@ -1167,26 +1176,32 @@ private fun SettingsDisclosure(
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     val visible = expanded || keepOpen
-    Column {
+    val rotation by animateFloatAsState(if (visible) 180f else 0f, label = "chevron")
+    Column(Modifier.animateContentSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
                 .semantics { stateDescription = if (visible) "Expanded" else "Collapsed" }
                 .clickable(role = Role.Button, enabled = !keepOpen) { expanded = !expanded }
-                .padding(vertical = 8.dp),
+                .padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(title, style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                    fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 Text(summary, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
             }
-            Text(if (keepOpen) "Testing" else if (visible) "Hide" else "Edit",
-                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            if (keepOpen) {
+                Text("Testing", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            } else {
+                Icon(Icons.Filled.ExpandMore, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.rotate(rotation))
+            }
         }
         if (visible) {
-            HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(vertical = 12.dp))
+            HorizontalDivider(color = PrayerTimesColors.divider, modifier = Modifier.padding(bottom = 12.dp))
             content()
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -1198,27 +1213,23 @@ private fun SectionCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = PrayerTimesColors.cardBackground
-        )
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = PrayerTimesColors.cardBackground)
     ) {
-        Column(
-            modifier = Modifier.padding(20.dp)
-        ) {
+        Column(modifier = Modifier.padding(20.dp)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(bottom = 16.dp)
+                modifier = Modifier.padding(bottom = 12.dp).semantics { heading() }
             )
             content()
         }
     }
 }
 
-
+/** The whole row toggles, not just the switch: a larger, easier target. */
 @Composable
 private fun SettingsToggleRow(
     title: String,
@@ -1229,11 +1240,14 @@ private fun SettingsToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .toggleable(value = checked, onValueChange = onCheckedChange, role = Role.Switch)
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyLarge,
@@ -1247,15 +1261,15 @@ private fun SettingsToggleRow(
                 )
             }
         }
-        
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = null,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = MaterialTheme.colorScheme.primary,
-                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                checkedTrackColor = MaterialTheme.colorScheme.primary,
                 uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                uncheckedBorderColor = MaterialTheme.colorScheme.outline
             )
         )
     }

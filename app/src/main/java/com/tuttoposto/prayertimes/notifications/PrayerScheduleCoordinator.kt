@@ -48,7 +48,9 @@ class PrayerScheduleCoordinator(context: Context) {
             val nextMidnight = java.time.LocalDate.now().plusDays(1)
                 .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
             SyncLogRepository(context).setNextMidnightSync(nextMidnight)
-            if (WidgetUpdateHelper.hasActiveWidgets(context)) WidgetUpdateHelper.updateAllWidgets(context)
+            // Also re-arms the widget minute tick (lost on reboot, app update or force-stop).
+            try { WidgetUpdateHelper.refresh(context) }
+            catch (e: Exception) { android.util.Log.e("PrayerSchedule", "Could not refresh widgets", e) }
             schedule
         }
     }
@@ -60,6 +62,7 @@ class PrayerScheduleCoordinator(context: Context) {
     ): Result<Unit> {
         var count = 0
         var coordinates: Pair<Double, Double>? = null
+        val asrSchool = SettingsRepository(context).getSettings().asrSchool
         val result = CacheFirstRefresh.run(
             schedule = {
                 val schedule = scheduleFromCache()
@@ -74,14 +77,14 @@ class PrayerScheduleCoordinator(context: Context) {
                     saved != null && (kotlin.math.abs(saved.latitude - it.first) > 0.05 ||
                         kotlin.math.abs(saved.longitude - it.second) > 0.05)
                 } ?: false
-                force || moved || repository.needsRefresh()
+                force || moved || repository.needsRefresh(asrSchool)
             },
             refresh = {
                 val target = coordinates
                 if (target == null) {
                     Result.failure(IllegalStateException("No location or saved prayer times"))
                 } else {
-                    repository.fetchAndCachePrayerTimes(target.first, target.second) {
+                    repository.fetchAndCachePrayerTimes(target.first, target.second, asrSchool) {
                         scheduleFromCache()
                     }.map { Unit }
                 }

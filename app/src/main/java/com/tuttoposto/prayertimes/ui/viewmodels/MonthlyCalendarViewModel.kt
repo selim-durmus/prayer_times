@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.tuttoposto.prayertimes.data.api.AladhanData
 import com.tuttoposto.prayertimes.data.api.NetworkModule
 import com.tuttoposto.prayertimes.data.repository.PrayerTimesRepository
+import com.tuttoposto.prayertimes.data.repository.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,20 +34,21 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
     val currentMonth: StateFlow<YearMonth> = _currentMonth.asStateFlow()
 
     private var cachedLocation: Pair<Double, Double>? = null
-    private val monthCache = mutableMapOf<YearMonth, List<DayPrayerTimes>>()
+    private val settingsRepository = SettingsRepository(application)
+    // Keyed by Asr school too, so switching Hanafi/Shafi'i never shows the other school's times.
+    private val monthCache = mutableMapOf<Pair<YearMonth, Int>, List<DayPrayerTimes>>()
 
     fun loadMonth(yearMonth: YearMonth = _currentMonth.value, forceRefresh: Boolean = false) {
         _currentMonth.value = yearMonth
 
-        val cached = monthCache[yearMonth]
-        if (cached != null && !forceRefresh) {
-            _uiState.value = MonthlyCalendarUiState.Success(cached)
-            Log.d(TAG, "Serving ${cached.size} days from cache for $yearMonth")
-            return
-        }
-
         viewModelScope.launch {
-            val savedDays = repository.getSavedMonth(yearMonth)
+            val school = settingsRepository.getSettings().asrSchool.apiValue
+            val cached = monthCache[yearMonth to school]
+            if (cached != null && !forceRefresh) {
+                _uiState.value = MonthlyCalendarUiState.Success(cached)
+                return@launch
+            }
+            val savedDays = repository.getSavedMonth(yearMonth).filter { it.asrSchool == school }
             val saved = savedDays.takeIf { it.size == yearMonth.lengthOfMonth() }?.map { day ->
                 fun time(name: String): String = day.prayers.first { it.name == name }.let {
                     Instant.ofEpochMilli(it.startTimeMillis).atZone(ZoneId.of(day.timezoneId))
@@ -55,11 +57,11 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
                 DayPrayerTimes(
                     day.date.dayOfMonth, day.date.format(DateTimeFormatter.ofPattern("d MMM")),
                     day.hijriDate, time("Fajr"), time("Dhuhr"), time("Asr"), time("Maghrib"), time("Isha"),
-                    day.date == LocalDate.now()
+                    day.date == LocalDate.now(), day.date
                 )
             }
             if (saved != null && !forceRefresh) {
-                monthCache[yearMonth] = saved
+                monthCache[yearMonth to school] = saved
                 _uiState.value = MonthlyCalendarUiState.Success(saved)
                 return@launch
             }
@@ -76,7 +78,8 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
                     year = yearMonth.year,
                     month = yearMonth.monthValue,
                     latitude = location.first,
-                    longitude = location.second
+                    longitude = location.second,
+                    school = school
                 )
 
                 if (response.code != 200) {
@@ -85,6 +88,10 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
                 }
 
                 val days = response.data.map { dayData ->
+                    val date = runCatching {
+                        LocalDate.of(dayData.date.gregorian.year.toInt(), dayData.date.gregorian.month.number,
+                            dayData.date.gregorian.day.toInt())
+                    }.getOrNull()
                     DayPrayerTimes(
                         dayOfMonth = dayData.date.gregorian.day.toIntOrNull() ?: 0,
                         dateLabel = "${dayData.date.gregorian.day} ${dayData.date.gregorian.month.en.take(3)}",
@@ -94,11 +101,12 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
                         asr = cleanTime(dayData.timings.asr),
                         maghrib = cleanTime(dayData.timings.maghrib),
                         isha = cleanTime(dayData.timings.isha),
-                        isToday = isToday(dayData)
+                        isToday = isToday(dayData),
+                        date = date
                     )
                 }
 
-                monthCache[yearMonth] = days
+                monthCache[yearMonth to school] = days
                 _uiState.value = MonthlyCalendarUiState.Success(days)
                 Log.d(TAG, "Fetched and cached ${days.size} days for $yearMonth")
             } catch (e: Exception) {
@@ -115,6 +123,10 @@ class MonthlyCalendarViewModel(application: Application) : AndroidViewModel(appl
 
     fun goToNextMonth() {
         loadMonth(_currentMonth.value.plusMonths(1))
+    }
+
+    fun goToToday() {
+        loadMonth(YearMonth.now())
     }
 
     private fun cleanTime(raw: String): String = raw.split(" ")[0].trim()
@@ -156,5 +168,6 @@ data class DayPrayerTimes(
     val asr: String,
     val maghrib: String,
     val isha: String,
-    val isToday: Boolean
+    val isToday: Boolean,
+    val date: LocalDate? = null
 )

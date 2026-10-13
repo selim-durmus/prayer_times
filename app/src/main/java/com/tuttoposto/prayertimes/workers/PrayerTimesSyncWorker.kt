@@ -24,9 +24,13 @@ class PrayerTimesSyncWorker(context: Context, params: WorkerParameters) : Corout
                 WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, request
             )
         }
-        fun enqueueImmediate(context: Context) {
+        /**
+         * [replace] restarts a refresh that may be waiting in retry backoff, e.g. one that failed
+         * before location permission was granted, so the first times arrive right away.
+         */
+        fun enqueueImmediate(context: Context, replace: Boolean = false) {
             WorkManager.getInstance(context).enqueueUniqueWork(
-                "prayer_times_refresh", ExistingWorkPolicy.KEEP,
+                "prayer_times_refresh", if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequestBuilder<PrayerTimesSyncWorker>().build()
             )
         }

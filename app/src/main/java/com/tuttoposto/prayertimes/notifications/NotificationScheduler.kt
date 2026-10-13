@@ -25,14 +25,13 @@ import java.time.format.DateTimeFormatter
  * Notification Scheduler using AlarmManager for exact timing.
  * 
  * Architecture: Simple Direct Scheduling
- * - Uses setAlarmClock() for reliable notification delivery
+ * - Delivery mode (exact vs clock alarm) is chosen by [PrayerAlarmDelivery]
  * - No complex cancel-then-reschedule logic (was causing race conditions)
  * - PendingIntent.FLAG_UPDATE_CURRENT handles updates automatically
  * - Date slots keep today and tomorrow independently scheduled
  * 
- * Why setAlarmClock() instead of setExactAndAllowWhileIdle():
- * - setAlarmClock() marks the event as a user-facing alarm.
- * - Exact alarm permission is required for precise delivery
+ * Clock alarms are used only when App Standby could otherwise throttle exact alarms;
+ * see [PrayerAlarmDelivery].
  */
 class NotificationScheduler(private val context: Context) {
     
@@ -112,7 +111,7 @@ class NotificationScheduler(private val context: Context) {
     }
 
     /**
-     * Schedule a single prayer notification using setAlarmClock().
+     * Schedule a single prayer notification.
      */
     private fun scheduleNotification(
         prayerName: String,
@@ -138,27 +137,9 @@ class NotificationScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
-        if (canScheduleExactAlarms()) {
-            val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            val showPendingIntent = PendingIntent.getActivity(
-                context,
-                notificationId + 1000,
-                showIntent ?: Intent(),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTimeMillis, showPendingIntent)
-            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
-            Log.d(TAG, "📅 Scheduled $prayerName for ${formatMillis(triggerTimeMillis)}")
-            logEvent(NotificationEventType.SCHEDULED, prayerName, "Scheduled for ${formatMillis(triggerTimeMillis)}")
-        } else {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerTimeMillis,
-                pendingIntent
-            )
-            Log.w(TAG, "⚠️ Used fallback for $prayerName at ${formatMillis(triggerTimeMillis)}")
-            logEvent(NotificationEventType.SCHEDULED, prayerName, "Scheduled (fallback) for ${formatMillis(triggerTimeMillis)}")
-        }
+        PrayerAlarmDelivery.schedule(context, triggerTimeMillis, pendingIntent, notificationId + 1000)
+        Log.d(TAG, "📅 Scheduled $prayerName for ${formatMillis(triggerTimeMillis)}")
+        logEvent(NotificationEventType.SCHEDULED, prayerName, "Scheduled for ${formatMillis(triggerTimeMillis)}")
     }
 
     private fun schedulePrayerStartNotification(
@@ -178,26 +159,9 @@ class NotificationScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        if (canScheduleExactAlarms()) {
-            val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            val showPendingIntent = PendingIntent.getActivity(
-                context,
-                notificationId + 5000,
-                showIntent ?: Intent(),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTimeMillis, showPendingIntent)
-            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
-            Log.d(TAG, "📅 Scheduled START $prayerName for ${formatMillis(triggerTimeMillis)}")
-            logEvent(NotificationEventType.SCHEDULED, prayerName, "Start scheduled ${formatMillis(triggerTimeMillis)}")
-        } else {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerTimeMillis,
-                pendingIntent
-            )
-            logEvent(NotificationEventType.SCHEDULED, prayerName, "Start (fallback) ${formatMillis(triggerTimeMillis)}")
-        }
+        PrayerAlarmDelivery.schedule(context, triggerTimeMillis, pendingIntent, notificationId + 5000)
+        Log.d(TAG, "📅 Scheduled START $prayerName for ${formatMillis(triggerTimeMillis)}")
+        logEvent(NotificationEventType.SCHEDULED, prayerName, "Start scheduled ${formatMillis(triggerTimeMillis)}")
     }
     
     /**
@@ -266,23 +230,7 @@ class NotificationScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
-        if (canScheduleExactAlarms()) {
-            val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            val showPendingIntent = PendingIntent.getActivity(
-                context,
-                NotificationHelper.NOTIFICATION_ID_TEST + 1000,
-                showIntent ?: Intent(),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTime, showPendingIntent)
-            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
-        } else {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerTime,
-                pendingIntent
-            )
-        }
+        PrayerAlarmDelivery.schedule(context, triggerTime, pendingIntent, NotificationHelper.NOTIFICATION_ID_TEST + 1000)
         
         Log.d(TAG, "📅 Scheduled TEST notification for ${formatMillis(triggerTime)}")
         logEvent(NotificationEventType.SCHEDULED, "TEST", "Test notification in ${delaySeconds}s")
@@ -306,23 +254,7 @@ class NotificationScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        if (canScheduleExactAlarms()) {
-            val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            val showPendingIntent = PendingIntent.getActivity(
-                context,
-                REQUEST_CODE_TEST_PRAYER_START + 1000,
-                showIntent ?: Intent(),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTime, showPendingIntent)
-            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
-        } else {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerTime,
-                pendingIntent
-            )
-        }
+        PrayerAlarmDelivery.schedule(context, triggerTime, pendingIntent, REQUEST_CODE_TEST_PRAYER_START + 1000)
 
         Log.d(TAG, "📅 Scheduled TEST prayer-start for ${formatMillis(triggerTime)}")
         logEvent(NotificationEventType.SCHEDULED, "TEST_START", "Test prayer-start in ${delaySeconds}s")
@@ -346,25 +278,8 @@ class NotificationScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         
-        if (canScheduleExactAlarms()) {
-            val showIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            val showPendingIntent = PendingIntent.getActivity(
-                context,
-                NotificationHelper.NOTIFICATION_ID_TEST + 1100,
-                showIntent ?: Intent(),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTime, showPendingIntent)
-            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
-            Log.d(TAG, "📅 Scheduled DELAYED TEST for ${formatMillis(triggerTime)} - CLOSE APP NOW!")
-        } else {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerTime,
-                pendingIntent
-            )
-            Log.d(TAG, "📅 Scheduled DELAYED TEST (fallback) for ${formatMillis(triggerTime)}")
-        }
+        PrayerAlarmDelivery.schedule(context, triggerTime, pendingIntent, NotificationHelper.NOTIFICATION_ID_TEST + 1100)
+        Log.d(TAG, "📅 Scheduled DELAYED TEST for ${formatMillis(triggerTime)} - CLOSE APP NOW!")
         
         logEvent(NotificationEventType.SCHEDULED, "DELAYED_TEST", "Fires in $delayMinutes min - CLOSE APP TO TEST!")
     }
@@ -385,6 +300,9 @@ class NotificationScheduler(private val context: Context) {
      * Get info about the next scheduled alarm clock from Android.
      */
     fun getNextAlarmClockInfo(): String {
+        if (PrayerAlarmDelivery.mode(context) == PrayerAlarmDelivery.Mode.EXACT) {
+            return "Exact alarms (not shown as clock alarms)"
+        }
         val nextAlarm = alarmManager.nextAlarmClock
         return if (nextAlarm != null) {
             "Next alarm: ${formatMillis(nextAlarm.triggerTime)}"

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import com.tuttoposto.prayertimes.data.api.*
+import com.tuttoposto.prayertimes.data.models.AsrSchool
 import com.tuttoposto.prayertimes.data.repository.PrayerTimesRepository
 import kotlinx.coroutines.*
 import org.junit.After
@@ -106,12 +107,29 @@ class PrayerTimesRepositoryTest {
         assertEquals(prayers.last().startTimeMillis, prayers[3].endTimeMillis)
     }
 
+    @Test fun asrSchoolIsRequestedStoredAndTriggersRefreshWhenChanged() = runBlocking {
+        repository.fetchAndCachePrayerTimes(53.5, -113.5).getOrThrow()
+        assertEquals(listOf(1, 1), api.schools)
+        assertFalse(repository.needsRefresh(AsrSchool.HANAFI))
+        assertTrue(repository.needsRefresh(AsrSchool.SHAFII))
+
+        repository.fetchAndCachePrayerTimes(53.5, -113.5, AsrSchool.SHAFII).getOrThrow()
+        assertEquals(listOf(1, 1, 0, 0), api.schools)
+        val cached = PrayerTimesRepository(store, api).getCachedPrayerTimes()!!
+        assertEquals(AsrSchool.SHAFII.apiValue, cached.asrSchool)
+        // Shafi'i Asr (16:00 in the fake API) also ends Dhuhr.
+        assertEquals(16, Instant.ofEpochMilli(cached.prayers[2].startTimeMillis).atZone(zone).hour)
+        assertEquals(cached.prayers[2].startTimeMillis, cached.prayers[1].endTimeMillis)
+        assertFalse(repository.needsRefresh(AsrSchool.SHAFII))
+    }
+
     private inner class FakeCalendarApi : AladhanApi {
         var isha = "22:00"
         var offline = false
         var incomplete = false
         var failMonth: YearMonth? = null
         val calls = mutableListOf<YearMonth>()
+        val schools = mutableListOf<Int>()
 
         override suspend fun getTimings(timestamp: Long, latitude: Double, longitude: Double, method: Int, school: Int): AladhanResponse =
             error("Daily endpoint must not be used")
@@ -119,11 +137,12 @@ class PrayerTimesRepositoryTest {
         override suspend fun getCalendar(year: Int, month: Int, latitude: Double, longitude: Double, method: Int, school: Int): AladhanCalendarResponse {
             val ym = YearMonth.of(year, month)
             calls += ym
+            schools += school
             if (offline || failMonth == ym) throw IOException("offline")
             val days = (1..ym.lengthOfMonth()).map { number ->
                 val date = ym.atDay(number)
                 AladhanData(
-                    AladhanTimings("05:00", "07:00", "13:00", "17:00", "20:00", "20:00", isha, "04:50", "01:30"),
+                    AladhanTimings("05:00", "07:00", "13:00", if (school == 0) "16:00" else "17:00", "20:00", "20:00", isha, "04:50", "01:30"),
                     AladhanDate(date.toString(), "0",
                         AladhanGregorian(date.toString(), number.toString(), AladhanMonth(month, ym.month.name), year.toString())),
                     AladhanMeta(latitude, longitude, zone.id, AladhanMethod(2, "ISNA"))

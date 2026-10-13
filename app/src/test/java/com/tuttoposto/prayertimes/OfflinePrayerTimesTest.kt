@@ -167,4 +167,16 @@ class OfflinePrayerTimesTest {
             }
         }
     }
+
+    @Test fun equivalentZoneNameIsNotTreatedAsFallback() {
+        // Device reports America/Denver; the API names the same clock America/Edmonton.
+        val denver = ZoneId.of("America/Denver")
+        val today = day(date)
+        val resolved = PrayerCachePolicy.resolve(listOf(today), date, denver)!!
+        assertFalse(resolved.isFallback)
+        assertEquals(today.prayers, resolved.prayers)
+        assertFalse(PrayerCachePolicy.needsRefresh((0L..14L).map { day(date.plusDays(it)) }, date, denver))
+        // A genuinely different clock still falls back to projected times.
+        assertTrue(PrayerCachePolicy.resolve(listOf(today), date, ZoneId.of("America/Chicago"))!!.isFallback)
+    }
 }

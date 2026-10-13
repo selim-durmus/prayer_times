@@ -30,9 +30,7 @@ object FajrPreviewAlarm {
         check(prefs(context).edit().putString(TOKEN, token).putLong(EXPIRES, at + 30_000).commit())
         val alarm = PendingIntent.getBroadcast(context, REQUEST_CODE, intent(context).putExtra(TOKEN, token),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val open = PendingIntent.getActivity(context, REQUEST_CODE, Intent(context, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        try { manager.setAlarmClock(AlarmManager.AlarmClockInfo(at, open), alarm) }
+        try { PrayerAlarmDelivery.schedule(context, at, alarm, REQUEST_CODE) }
         catch (e: Exception) { cancel(context); throw e }
     }
 

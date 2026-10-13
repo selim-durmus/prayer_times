@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tuttoposto.prayertimes.data.models.AppSettings
+import com.tuttoposto.prayertimes.data.models.AsrSchool
+import com.tuttoposto.prayertimes.workers.PrayerTimesSyncWorker
 import com.tuttoposto.prayertimes.data.models.FajrWakeUpSettings
 import com.tuttoposto.prayertimes.data.models.FajrWakeSkip
 import com.tuttoposto.prayertimes.notifications.PrayerAlarmPlan
@@ -32,6 +34,7 @@ import com.tuttoposto.prayertimes.notifications.NotificationHelper
 import com.tuttoposto.prayertimes.notifications.FajrAlarmPresentation
 import com.tuttoposto.prayertimes.notifications.FajrPreviewAlarm
 import com.tuttoposto.prayertimes.notifications.AlarmReadiness
+import com.tuttoposto.prayertimes.notifications.PrayerAlarmDelivery
 import com.tuttoposto.prayertimes.notifications.ReadinessCheck
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -78,6 +81,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _debugTestMessage = MutableStateFlow<String?>(null)
     val debugTestMessage = _debugTestMessage.asStateFlow()
     private var previewJob: Job? = null
+    private var lastDeliveryMode: PrayerAlarmDelivery.Mode? = null
     
     init {
         observeData()
@@ -234,6 +238,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             ishaEzan = settings.prayerEzanPreferences.isha,
             debugModeEnabled = settings.debugModeEnabled,
             useAmoledTheme = settings.useAmoledTheme,
+            asrSchool = settings.asrSchool,
+            asrTimesPending = prayerCache != null && prayerCache.asrSchool != settings.asrSchool.apiValue,
             prayerTimesInfo = prayerTimesDisplay,
             notificationStatusInfo = notificationStatus,
             hasPrayerData = prayerCache != null,
@@ -302,6 +308,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     /** Read-only refresh when returning from Android settings, and while Settings is visible. */
     suspend fun refreshReadiness() {
+        // Battery exemption changes how alarms are delivered; re-issue them right away.
+        val mode = PrayerAlarmDelivery.mode(getApplication())
+        if (lastDeliveryMode != null && mode != lastDeliveryMode) rescheduleNotifications()
+        lastDeliveryMode = mode
         val settings = settingsRepository.getSettings()
         val cache = prayerTimesRepository.getCachedPrayerTimes()
         val now = System.currentTimeMillis()
@@ -446,6 +456,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
     
+    /** Saves the Asr school and re-downloads saved months with it (in the background, offline-safe). */
+    fun setAsrSchool(school: AsrSchool) {
+        viewModelScope.launch {
+            settingsRepository.setAsrSchool(school)
+            PrayerTimesSyncWorker.enqueueImmediate(getApplication(), replace = true)
+        }
+    }
+
     fun setUseAmoledTheme(enabled: Boolean) {
         viewModelScope.launch {
             settingsRepository.setUseAmoledTheme(enabled)
@@ -609,6 +627,9 @@ data class SettingsUiState(
     // Debug mode (hidden by default, activated by long-pressing Settings title)
     val debugModeEnabled: Boolean = false,
     val useAmoledTheme: Boolean = false,
+    val asrSchool: AsrSchool = AsrSchool.HANAFI,
+    /** Saved times still use the previous school until the next successful download. */
+    val asrTimesPending: Boolean = false,
     
     // Debug info
     val prayerTimesInfo: List<PrayerTimeDebugInfo> = emptyList(),

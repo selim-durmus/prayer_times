@@ -15,7 +15,9 @@ class BootCompletedReceiver : BroadcastReceiver() {
                 Intent.ACTION_MY_PACKAGE_REPLACED, AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED
             )) return
         NotificationHelper.createNotificationChannels(context)
-        restoreCachedPrayerAlarms(context, goAsync(), SyncSource.WORKMANAGER)
+        val source = if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
+            intent.action == "android.intent.action.QUICKBOOT_POWERON") SyncSource.BOOT else SyncSource.WORKMANAGER
+        restoreCachedPrayerAlarms(context, goAsync(), source)
     }
 }
 

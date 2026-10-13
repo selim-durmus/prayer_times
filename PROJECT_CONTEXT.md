@@ -15,6 +15,26 @@
 > available offline in the calendar. Unit coverage is in `OfflinePrayerTimesTest`,
 > `PrayerTimesRepositoryTest`, and `NotificationSchedulePersistenceTest`.
 
+> October 2026 review: `PrayerTimeline` (data/models/PrayerCountdown.kt) is the single source
+> for "what is the countdown measuring" (inside a window → its end; between windows → next start),
+> shared by the widgets and the Today screen. Widgets redraw on every wall-clock minute via an
+> exact, non-wakeup `RTC` alarm (`setExact`), rounding remaining minutes up. The old inexact
+> 60 s `ELAPSED` alarm could be deferred up to ~10 minutes on Android 12+ (minimum window for
+> inexact alarms), which made the countdown lag until the app was opened. Every
+> `scheduleFromCache()` also re-arms the widget tick (reboot, update, clock/zone change).
+> UI: Today/Month/Tasbihat are visible tabs over the pager; the Today screen has a live
+> countdown card. Alarm-like playback now loops alarm tones (Ringtone plays once by default);
+> Ezan plays once and then ends the session. The unused `data/model`, `data/local` and
+> `data/remote` packages were removed.
+>
+> Follow-up: widgets show a launcher-ticked `Chronometer` (H:MM:SS); the minute tick still
+> moves the progress bar and switches prayers. `PrayerAlarmDelivery` picks how prayer alarms are
+> scheduled: plain `setExactAndAllowWhileIdle` when the app is battery-unrestricted (exempt from
+> App Standby alarm caps, no alarm icon / lock-screen "next alarm"), otherwise `setAlarmClock`
+> (always exempt), or inexact without exact-alarm access. Asr school (Hanafi = Aladhan school 1,
+> default; Shafi'i = 0) is a setting; each saved day records its school, a mismatch triggers a
+> re-download, and days of different schools are never merged.
+
 This document summarizes the **Prayer Times** Android application (`com.tuttoposto.prayertimes`): purpose, stack, architecture, file layout, data/UI layers, design choices, constraints, and dependency versions. It is intended to onboard a reader (or an AI session) with **no prior exposure** to the repo.
 
 ---

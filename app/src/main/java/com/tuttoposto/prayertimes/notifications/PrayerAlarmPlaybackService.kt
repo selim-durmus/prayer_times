@@ -35,6 +35,7 @@ class PrayerAlarmPlaybackService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var timeoutRunnable: Runnable? = null
+    private var completionRunnable: Runnable? = null
     private var isForeground = false
     private val session = PlaybackSession()
     private var showFajrScreen = false
@@ -67,6 +68,7 @@ class PrayerAlarmPlaybackService : Service() {
         val text = intent.getStringExtra(EXTRA_TEXT) ?: ""
         val preview = intent.getBooleanExtra(EXTRA_PREVIEW, false)
         val debugTest = intent.getBooleanExtra(EXTRA_DEBUG_TEST, false)
+        val loop = intent.getBooleanExtra(EXTRA_LOOP, true)
         // Test notifications use the real playback path but cannot interrupt a real alarm.
         if (!session.start(preview || debugTest)) return START_NOT_STICKY
         showFajrScreen = intent.getBooleanExtra(EXTRA_FAJR_SCREEN, false)
@@ -112,6 +114,9 @@ class PrayerAlarmPlaybackService : Service() {
                         .setUsage(AudioAttributes.USAGE_ALARM)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build()
+                    // Ringtone plays once by default: a short alarm tone would go silent after a
+                    // few seconds while the alarm notification stayed up. Loop like the Clock app.
+                    isLooping = loop
                     play()
                 }
                 if (ringtone == null) {
@@ -122,6 +127,7 @@ class PrayerAlarmPlaybackService : Service() {
             }
         }
 
+        if (!loop) watchForCompletion()
         timeoutRunnable = Runnable { shutdown() }
         val duration = if (preview) NotificationHelper.PREVIEW_DURATION_MS else
             followUp?.let { (it.endMillis - System.currentTimeMillis()).coerceIn(1L, MAX_PLAYBACK_MS) } ?: MAX_PLAYBACK_MS
@@ -208,9 +214,22 @@ class PrayerAlarmPlaybackService : Service() {
         wakeLock = null
     }
 
+    /** A sound played once (Ezan) ends the session when it finishes, instead of idling silently. */
+    private fun watchForCompletion() {
+        val token = session.token
+        completionRunnable = object : Runnable {
+            override fun run() {
+                if (session.token != token || !session.active) return
+                if (ringtone?.isPlaying == true) mainHandler.postDelayed(this, 1_000) else shutdown()
+            }
+        }.also { mainHandler.postDelayed(it, 2_000) }
+    }
+
     private fun cancelTimeout() {
         timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         timeoutRunnable = null
+        completionRunnable?.let { mainHandler.removeCallbacks(it) }
+        completionRunnable = null
     }
 
     private fun shutdown() {
@@ -258,12 +277,13 @@ class PrayerAlarmPlaybackService : Service() {
         private const val EXTRA_TEXT = "text"
         private const val EXTRA_FOLLOW_UP = "follow_up"
         private const val EXTRA_DEBUG_TEST = "debug_test"
+        private const val EXTRA_LOOP = "loop"
         const val PLAYBACK_NOTIFICATION_ID = 5001
         private const val MAX_PLAYBACK_MS = 20 * 60 * 1000L
 
         fun startPlayback(context: Context, soundUri: Uri, title: String, text: String, isPreview: Boolean = false,
                           showFajrScreen: Boolean = false, sunriseMillis: Long = 0, followUp: ReminderFollowUp? = null,
-                          isDebugTest: Boolean = false) {
+                          isDebugTest: Boolean = false, loop: Boolean = true) {
             val app = context.applicationContext
             if (!NotificationHelper.hasNotificationPermission(app)) {
                 Log.w(TAG, "No notification permission, skip alarm playback")
@@ -278,6 +298,7 @@ class PrayerAlarmPlaybackService : Service() {
                 putExtra(EXTRA_SUNRISE, sunriseMillis)
                 followUp?.let { putExtra(EXTRA_FOLLOW_UP, ReminderFollowUps.encode(it)) }
                 putExtra(EXTRA_DEBUG_TEST, isDebugTest)
+                putExtra(EXTRA_LOOP, loop)
             }
             ContextCompat.startForegroundService(app, intent)
         }

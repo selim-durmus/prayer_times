@@ -10,23 +10,47 @@
 
     <TextView
         android:id="@+id/widget_small_prayer_name"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+        android:layout_width="match_parent"
+        android:layout_height="16dp"
+        android:gravity="center"
         android:text="Maghrib"
         android:textColor="#D4AF37"
         android:textSize="12sp"
         android:fontFamily="sans-serif-medium"
-        android:maxLines="1" />
+        android:maxLines="1"
+        android:autoSizeTextType="uniform"
+        android:autoSizeMinTextSize="8sp"
+        android:autoSizeMaxTextSize="12sp"
+        android:autoSizeStepGranularity="1sp" />
+
+    <Chronometer
+        android:id="@+id/widget_small_countdown"
+        android:layout_width="match_parent"
+        android:layout_height="24dp"
+        android:layout_marginTop="2dp"
+        android:gravity="center"
+        android:countDown="true"
+        android:textColor="#F2F2F2"
+        android:textSize="18sp"
+        android:fontFamily="sans-serif-medium"
+        android:fontFeatureSettings="tnum"
+        android:maxLines="1"
+        android:autoSizeTextType="uniform"
+        android:autoSizeMinTextSize="10sp"
+        android:autoSizeMaxTextSize="18sp"
+        android:autoSizeStepGranularity="1sp" />
 
     <TextView
-        android:id="@+id/widget_small_countdown"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="2h 15m"
-        android:textColor="#E8E8E8"
-        android:textSize="16sp"
+        android:id="@+id/widget_small_status"
+        android:layout_width="match_parent"
+        android:layout_height="24dp"
+        android:layout_marginTop="2dp"
+        android:gravity="center"
+        android:text="Open app"
+        android:textColor="#F2F2F2"
+        android:textSize="12sp"
         android:fontFamily="sans-serif-medium"
         android:maxLines="1"
-        android:layout_marginTop="2dp" />
+        android:visibility="gone" />
 
 </LinearLayout>

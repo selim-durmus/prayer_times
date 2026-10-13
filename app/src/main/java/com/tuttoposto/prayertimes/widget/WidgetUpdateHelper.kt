@@ -3,226 +3,176 @@ package com.tuttoposto.prayertimes.widget
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
+import android.util.Log
+import android.view.View
 import android.widget.RemoteViews
 import com.tuttoposto.prayertimes.R
-import com.tuttoposto.prayertimes.data.models.PrayerTime
+import com.tuttoposto.prayertimes.data.models.PrayerCountdown
+import com.tuttoposto.prayertimes.data.models.PrayerTimeline
 import com.tuttoposto.prayertimes.data.repository.PrayerTimesRepository
 import com.tuttoposto.prayertimes.ui.MainActivity
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+/**
+ * Renders both widgets and keeps their countdown in step with the clock.
+ *
+ * The seconds countdown is a Chronometer the launcher ticks by itself. The widgets are also
+ * redrawn on every wall-clock minute boundary with an exact, non-wakeup alarm, which moves the
+ * progress bar and switches to the next prayer when a countdown reaches zero. Non-wakeup means no battery cost while the screen
+ * is off: Android holds the alarm and delivers it the moment the screen turns on, so the widget
+ * is current when it is looked at. (The previous inexact 60 s alarm could be deferred by up to
+ * ten minutes on Android 12+, which is why the widget lagged until the app was opened.)
+ *
+ * Every refresh re-arms the chain, so any app activity (opening the app, a sync, a reminder,
+ * reboot, clock or time-zone change) also repairs a broken chain.
+ */
 object WidgetUpdateHelper {
 
-    private const val UPDATE_INTERVAL_MS = 60_000L
+    private const val TAG = "PrayerWidget"
+    private const val ACTION_TICK = "com.tuttoposto.prayertimes.WIDGET_UPDATE"
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
 
-    data class NextPrayerInfo(
-        val prayerName: String,
-        val prayerTimeFormatted: String,
-        val countdownText: String,
-        val progressPercent: Int,
-        val isTomorrow: Boolean,
-        val isFallback: Boolean = false
-    )
-
-    fun updateAllWidgets(context: Context) {
-        val appContext = context.applicationContext
-        val manager = AppWidgetManager.getInstance(appContext)
-        val info = getNextPrayerInfo(appContext)
-
-        val ids2x1 = manager.getAppWidgetIds(
-            ComponentName(appContext, PrayerWidgetProvider::class.java)
-        )
-        for (id in ids2x1) {
-            updateWidget2x1(appContext, manager, id, info)
-        }
-
-        val ids1x1 = manager.getAppWidgetIds(
-            ComponentName(appContext, PrayerWidgetSmallProvider::class.java)
-        )
-        for (id in ids1x1) {
-            updateWidget1x1(appContext, manager, id, info)
-        }
-    }
-
-    private fun updateWidget2x1(
-        context: Context,
-        manager: AppWidgetManager,
-        widgetId: Int,
-        info: NextPrayerInfo?
-    ) {
-        val views = RemoteViews(context.packageName, R.layout.widget_prayer_times)
-
-        if (info != null) {
-            val name = (if (info.isFallback) "≈ " else "") +
-                (if (info.isTomorrow) "${info.prayerName} ᵗᵐʳʷ" else info.prayerName)
-            views.setTextViewText(R.id.widget_prayer_info, name)
-            views.setTextViewText(R.id.widget_prayer_time, info.prayerTimeFormatted)
-            views.setTextViewText(R.id.widget_countdown, info.countdownText)
-            views.setProgressBar(R.id.widget_progress, 100, info.progressPercent, false)
-        } else {
-            views.setTextViewText(R.id.widget_prayer_info, "Prayer")
-            views.setTextViewText(R.id.widget_prayer_time, "—")
-            views.setTextViewText(R.id.widget_countdown, "Open app")
-            views.setProgressBar(R.id.widget_progress, 100, 0, false)
-        }
-
-        val openAppIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context, 0, openAppIntent, PendingIntent.FLAG_IMMUTABLE
-        )
-        views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
-
-        manager.updateAppWidget(widgetId, views)
-    }
-
-    private fun updateWidget1x1(
-        context: Context,
-        manager: AppWidgetManager,
-        widgetId: Int,
-        info: NextPrayerInfo?
-    ) {
-        val views = RemoteViews(context.packageName, R.layout.widget_prayer_times_small)
-
-        if (info != null) {
-            val name = (if (info.isFallback) "≈ " else "") +
-                (if (info.isTomorrow) "${info.prayerName} ᵗᵐʳʷ" else info.prayerName)
-            views.setTextViewText(R.id.widget_small_prayer_name, name)
-            views.setTextViewText(R.id.widget_small_countdown, info.countdownText)
-        } else {
-            views.setTextViewText(R.id.widget_small_prayer_name, "—")
-            views.setTextViewText(R.id.widget_small_countdown, "Open app")
-        }
-
-        val openAppIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context, 1, openAppIntent, PendingIntent.FLAG_IMMUTABLE
-        )
-        views.setOnClickPendingIntent(R.id.widget_small_root, pendingIntent)
-
-        manager.updateAppWidget(widgetId, views)
-    }
-
-    fun getNextPrayerInfo(context: Context): NextPrayerInfo? {
-        val repository = PrayerTimesRepository(context.applicationContext)
-        val days = runBlocking { repository.getSchedulingDays() }
-        if (days.isEmpty()) return null
-        val now = System.currentTimeMillis()
-        val zoneId = ZoneId.systemDefault()
-        val today = LocalDate.now(zoneId)
-        val effectivePrayers = days.flatMap { it.prayers }.sortedBy { it.startTimeMillis }
-        fun fallback(prayer: PrayerTime) = days.first { prayer in it.prayers }.isFallback
-
-        // If we're inside a prayer window, count down to that prayer's end (e.g. Fajr → sunrise),
-        // not to the next prayer's start. Otherwise during Fajr we'd incorrectly show Dhuhr's start.
-        for (prayer in effectivePrayers) {
-            if (now >= prayer.startTimeMillis && now < prayer.endTimeMillis) {
-                val timeUntilMs = prayer.endTimeMillis - now
-                val windowMs = prayer.endTimeMillis - prayer.startTimeMillis
-                val progress = if (windowMs > 0) {
-                    ((now - prayer.startTimeMillis).toFloat() / windowMs * 100).toInt().coerceIn(0, 100)
-                } else {
-                    100
-                }
-                return NextPrayerInfo(
-                    prayerName = prayer.name,
-                    prayerTimeFormatted = formatTime(prayer.endTimeMillis, zoneId),
-                    countdownText = formatCountdown(timeUntilMs),
-                    progressPercent = progress,
-                    isTomorrow = Instant.ofEpochMilli(prayer.startTimeMillis).atZone(zoneId).toLocalDate().isAfter(today),
-                    isFallback = fallback(prayer)
-                )
+    /** For receivers and providers: refresh off the main thread within the broadcast's lifetime. */
+    fun refreshAsync(receiver: BroadcastReceiver, context: Context) {
+        val pending = receiver.goAsync()
+        val app = context.applicationContext
+        scope.launch {
+            try {
+                refresh(app)
+            } catch (e: Exception) {
+                Log.e(TAG, "Widget refresh failed", e)
+            } finally {
+                pending.finish()
             }
         }
+    }
 
-        // Find the next prayer whose start time is still in the future
-        for (i in effectivePrayers.indices) {
-            if (effectivePrayers[i].startTimeMillis > now) {
-                val next = effectivePrayers[i]
-                val windowStart = if (i > 0) {
-                    effectivePrayers[i - 1].startTimeMillis
-                } else {
-                    today.atStartOfDay(zoneId).toInstant().toEpochMilli()
-                }
-
-                val timeUntilMs = next.startTimeMillis - now
-                val windowMs = next.startTimeMillis - windowStart
-                val progress = if (windowMs > 0) {
-                    ((now - windowStart).toFloat() / windowMs * 100).toInt().coerceIn(0, 100)
-                } else 0
-
-                return NextPrayerInfo(
-                    prayerName = next.name,
-                    prayerTimeFormatted = formatTime(next.startTimeMillis, zoneId),
-                    countdownText = formatCountdown(timeUntilMs),
-                    progressPercent = progress,
-                    isTomorrow = Instant.ofEpochMilli(next.startTimeMillis).atZone(zoneId).toLocalDate().isAfter(today),
-                    isFallback = fallback(next)
-                )
-            }
+    /** Redraw every placed widget from saved prayer times, then arm the next minute tick. */
+    suspend fun refresh(context: Context) {
+        val app = context.applicationContext
+        if (!hasActiveWidgets(app)) {
+            cancelScheduledUpdates(app)
+            return
         }
-
-        return null
+        try {
+            val days = PrayerTimesRepository(app).getSchedulingDays()
+            val now = System.currentTimeMillis()
+            render(app, PrayerTimeline.countdown(days, now), now)
+        } finally {
+            // Even if reading or drawing failed, keep ticking so the widget recovers on its own.
+            scheduleNextUpdate(app)
+        }
     }
 
+    private fun render(context: Context, countdown: PrayerCountdown?, now: Long) {
+        val manager = AppWidgetManager.getInstance(context)
+        val zone = ZoneId.systemDefault()
+        val label = countdown?.let {
+            (if (it.isFallback) "≈ " else "") + it.prayerName +
+                if (it.phase == PrayerCountdown.Phase.ENDS) " ends" else ""
+        }
+        val time = countdown?.let {
+            Instant.ofEpochMilli(it.targetMillis).atZone(zone).format(timeFormat)
+        }
+        val remaining = countdown?.let { PrayerTimeline.formatMinutes(it.remainingMillis(now)) }
+        val description = countdown?.let {
+            if (it.phase == PrayerCountdown.Phase.ENDS) "${it.prayerName} ends in $remaining, at $time"
+            else "${it.prayerName} in $remaining, at $time"
+        } ?: "Prayer times not available. Open the app."
 
-    private fun formatTime(millis: Long, zoneId: ZoneId): String {
-        return Instant.ofEpochMilli(millis)
-            .atZone(zoneId)
-            .toLocalTime()
-            .format(DateTimeFormatter.ofPattern("HH:mm"))
+        for (id in manager.getAppWidgetIds(ComponentName(context, PrayerWidgetProvider::class.java))) {
+            val views = RemoteViews(context.packageName, R.layout.widget_prayer_times)
+            views.setTextViewText(R.id.widget_prayer_info, label ?: "Prayer times")
+            views.setTextViewText(R.id.widget_prayer_time, time ?: "—")
+            views.showCountdown(R.id.widget_countdown, R.id.widget_status, countdown, now)
+            views.setProgressBar(R.id.widget_progress, 1000,
+                countdown?.let { (it.progress(now) * 1000).toInt() } ?: 0, false)
+            views.setContentDescription(R.id.widget_root, description)
+            views.setOnClickPendingIntent(R.id.widget_root, openAppIntent(context, 0))
+            manager.updateAppWidget(id, views)
+        }
+        for (id in manager.getAppWidgetIds(ComponentName(context, PrayerWidgetSmallProvider::class.java))) {
+            val views = RemoteViews(context.packageName, R.layout.widget_prayer_times_small)
+            views.setTextViewText(R.id.widget_small_prayer_name, label ?: "—")
+            views.showCountdown(R.id.widget_small_countdown, R.id.widget_small_status, countdown, now)
+            views.setContentDescription(R.id.widget_small_root, description)
+            views.setOnClickPendingIntent(R.id.widget_small_root, openAppIntent(context, 1))
+            manager.updateAppWidget(id, views)
+        }
     }
 
-    private fun formatCountdown(millis: Long): String {
-        if (millis <= 0) return "now"
-        val totalMinutes = millis / 60_000
-        val hours = totalMinutes / 60
-        val minutes = totalMinutes % 60
-        return if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
+    /**
+     * The launcher ticks the Chronometer every second on its own, so the seconds countdown stays
+     * exact between our minute redraws. Its base is in the elapsed-realtime clock shared by all
+     * processes. Prayer times fall on whole minutes, so the minute tick swaps to the next prayer
+     * the moment this reaches zero.
+     */
+    private fun RemoteViews.showCountdown(chronometerId: Int, statusId: Int, countdown: PrayerCountdown?, now: Long) {
+        if (countdown == null) {
+            setChronometer(chronometerId, SystemClock.elapsedRealtime(), null, false)
+            setViewVisibility(chronometerId, View.GONE)
+            setViewVisibility(statusId, View.VISIBLE)
+            return
+        }
+        setChronometerCountDown(chronometerId, true)
+        setChronometer(chronometerId, SystemClock.elapsedRealtime() + countdown.remainingMillis(now), null, true)
+        setViewVisibility(chronometerId, View.VISIBLE)
+        setViewVisibility(statusId, View.GONE)
     }
 
-    // --- Periodic update scheduling ---
+    private fun openAppIntent(context: Context, requestCode: Int): PendingIntent =
+        PendingIntent.getActivity(
+            context, requestCode,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE
+        )
 
-    fun scheduleNextUpdate(context: Context) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pendingIntent = getUpdatePendingIntent(context)
-        val triggerAt = SystemClock.elapsedRealtime() + UPDATE_INTERVAL_MS
-        alarmManager.set(AlarmManager.ELAPSED_REALTIME, triggerAt, pendingIntent)
+    // --- Minute tick ---
+
+    private fun scheduleNextUpdate(context: Context) {
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        val pendingIntent = tickIntent(context)
+        val at = PrayerTimeline.nextMinuteBoundary(System.currentTimeMillis())
+        try {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExact(AlarmManager.RTC, at, pendingIntent)
+                return
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Exact alarm access was revoked; widget ticks may be delayed", e)
+        }
+        // Without exact-alarm access Android may batch this; Alarm readiness flags that state.
+        alarmManager.setWindow(AlarmManager.RTC, at, 60_000L, pendingIntent)
     }
 
     fun cancelScheduledUpdates(context: Context) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        alarmManager.cancel(getUpdatePendingIntent(context))
+        context.getSystemService(AlarmManager::class.java).cancel(tickIntent(context))
     }
 
     fun hasActiveWidgets(context: Context): Boolean {
         val manager = AppWidgetManager.getInstance(context)
-        val ids2x1 = manager.getAppWidgetIds(
-            ComponentName(context, PrayerWidgetProvider::class.java)
-        )
-        val ids1x1 = manager.getAppWidgetIds(
-            ComponentName(context, PrayerWidgetSmallProvider::class.java)
-        )
-        return ids2x1.isNotEmpty() || ids1x1.isNotEmpty()
+        return manager.getAppWidgetIds(ComponentName(context, PrayerWidgetProvider::class.java)).isNotEmpty() ||
+            manager.getAppWidgetIds(ComponentName(context, PrayerWidgetSmallProvider::class.java)).isNotEmpty()
     }
 
-    private fun getUpdatePendingIntent(context: Context): PendingIntent {
-        val intent = Intent(context, WidgetUpdateReceiver::class.java).apply {
-            action = "com.tuttoposto.prayertimes.WIDGET_UPDATE"
-        }
-        return PendingIntent.getBroadcast(
-            context, 0, intent,
+    private fun tickIntent(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(
+            context, 0,
+            Intent(context, WidgetUpdateReceiver::class.java).setAction(ACTION_TICK),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-    }
 }

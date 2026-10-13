@@ -1,5 +1,6 @@
 package com.tuttoposto.prayertimes.data.repository
 
+import com.tuttoposto.prayertimes.data.models.AsrSchool
 import com.tuttoposto.prayertimes.data.models.PrayerTimesCache
 import java.time.Instant
 import java.time.LocalDate
@@ -9,12 +10,12 @@ import java.time.temporal.ChronoUnit
 /** Selects real cached days first. Approximation never becomes a new source of truth. */
 object PrayerCachePolicy {
     fun resolve(days: List<PrayerTimesCache>, date: LocalDate, zone: ZoneId): PrayerTimesCache? {
-        val source = days.firstOrNull { it.date == date && it.timezoneId == zone.id }
+        val source = days.firstOrNull { it.date == date && sameClock(it.timezoneId, zone, date) }
             ?: days.filter { !it.date.isAfter(date) }.maxByOrNull { it.date }
             ?: days.minByOrNull { it.date }
             ?: return null
         val through = days.maxOf { it.date }
-        if (source.date == date && source.timezoneId == zone.id) {
+        if (source.date == date && sameClock(source.timezoneId, zone, date)) {
             return source.copy(cachedThrough = through)
         }
         val sourceZone = ZoneId.of(source.timezoneId)
@@ -38,8 +39,29 @@ object PrayerCachePolicy {
         )
     }
 
-    fun needsRefresh(days: List<PrayerTimesCache>, today: LocalDate, zone: ZoneId): Boolean =
+    fun needsRefresh(
+        days: List<PrayerTimesCache>, today: LocalDate, zone: ZoneId,
+        asrSchool: AsrSchool = AsrSchool.HANAFI
+    ): Boolean =
         (0L..14L).any { offset ->
-            days.none { it.date == today.plusDays(offset) && it.timezoneId == zone.id }
+            days.none {
+                it.date == today.plusDays(offset) && sameClock(it.timezoneId, zone, it.date) &&
+                    it.asrSchool == asrSchool.apiValue
+            }
         }
+
+    /**
+     * Android and the API may name the same clock differently (America/Denver vs America/Edmonton).
+     * Saved days are exact, not approximations, when both zones keep identical UTC offsets over
+     * that prayer day and the following night (overnight Isha).
+     */
+    internal fun sameClock(savedZoneId: String, zone: ZoneId, date: LocalDate): Boolean {
+        if (savedZoneId == zone.id) return true
+        val saved = runCatching { ZoneId.of(savedZoneId) }.getOrNull() ?: return false
+        val start = date.atStartOfDay(zone).toInstant()
+        return (0L..48L step 3).all { hours ->
+            val instant = start.plusSeconds(hours * 3600)
+            saved.rules.getOffset(instant) == zone.rules.getOffset(instant)
+        }
+    }
 }

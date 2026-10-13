@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.tuttoposto.prayertimes.data.models.AppSettings
+import com.tuttoposto.prayertimes.data.models.AsrSchool
 import com.tuttoposto.prayertimes.data.models.FajrWakeUpSettings
 import com.tuttoposto.prayertimes.data.models.FajrWakeSkip
 import com.tuttoposto.prayertimes.data.models.ReminderSound
@@ -54,6 +55,7 @@ class SettingsRepository internal constructor(private val dataStore: DataStore<P
         val NOTIFICATION_STYLE_START = stringPreferencesKey("notification_style_start")
         val DEBUG_MODE_ENABLED = booleanPreferencesKey("debug_mode_enabled")
         val USE_AMOLED_THEME = booleanPreferencesKey("use_amoled_theme")
+        val ASR_SCHOOL = stringPreferencesKey("asr_school")
         val NOTIFY_ON_PRAYER_START = booleanPreferencesKey("notify_on_prayer_start")
         /** Legacy global Ezan toggle; used to seed per-prayer defaults when [FAJR_EZAN] etc. are absent. */
         val USE_EZAN_FOR_PRAYER_START = booleanPreferencesKey("use_ezan_for_prayer_start")
@@ -110,6 +112,7 @@ class SettingsRepository internal constructor(private val dataStore: DataStore<P
             notificationStylePrayerStart = startStyle,
             debugModeEnabled = prefs[Keys.DEBUG_MODE_ENABLED] ?: false,
             useAmoledTheme = prefs[Keys.USE_AMOLED_THEME] ?: false,
+            asrSchool = prefs[Keys.ASR_SCHOOL]?.let { raw -> AsrSchool.entries.find { it.name == raw } } ?: AsrSchool.HANAFI,
             notifyOnPrayerStart = prefs[Keys.NOTIFY_ON_PRAYER_START] ?: false,
             prayerEzanPreferences = PrayerEzanPreferences(
                 fajr = prefs[Keys.FAJR_EZAN] ?: legacyEzan,
@@ -127,6 +130,8 @@ class SettingsRepository internal constructor(private val dataStore: DataStore<P
     suspend fun getSettings(): AppSettings {
         return settingsFlow.first()
     }
+
+    suspend fun setAsrSchool(school: AsrSchool) = dataStore.edit { it[Keys.ASR_SCHOOL] = school.name }
 
     suspend fun setFajrWakeEnabled(enabled: Boolean) = dataStore.edit { it[Keys.FAJR_WAKE_ENABLED] = enabled }
     suspend fun setFajrWakeMinutes(minutes: Int) {

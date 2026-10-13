@@ -26,7 +26,9 @@ data class PrayerTimesCache(
     val sourceDate: LocalDate = date,
     val sourceTimezoneId: String = timezoneId,
     val fetchedAtMillis: Long = 0,
-    val cachedThrough: LocalDate = date
+    val cachedThrough: LocalDate = date,
+    /** Aladhan `school` used for these times; days saved before this setting existed were Hanafi. */
+    val asrSchool: Int = AsrSchool.HANAFI.apiValue
 ) {
     val isFallback: Boolean get() = sourceDate != date || sourceTimezoneId != timezoneId
 

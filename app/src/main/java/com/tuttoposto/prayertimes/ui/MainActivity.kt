@@ -15,6 +15,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -30,7 +31,10 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -38,7 +42,8 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -103,7 +108,7 @@ class MainActivity : ComponentActivity() {
         
         if (hasLocationPermission) {
             Log.d(TAG, "Location permission granted")
-            fetchPrayerTimesAndSchedule()
+            PrayerTimesSyncWorker.enqueueImmediate(this, replace = true)
         } else {
             Log.w(TAG, "Location permission denied")
             Toast.makeText(
@@ -148,14 +153,14 @@ class MainActivity : ComponentActivity() {
         // Enqueue periodic sync work
         PrayerTimesSyncWorker.enqueue(this)
         
-        // Restore saved alarms even before location permission is granted.
+        // Restore saved alarms even before location permission is granted. Permission prompts
+        // run once per launch, not again after rotation or a theme change recreates the activity.
         fetchPrayerTimesAndSchedule()
-        requestPermissions()
+        if (savedInstanceState == null) requestPermissions()
         
         setContent {
-            val useAmoled by settingsRepository.settingsFlow
-                .map { it.useAmoledTheme }
-                .collectAsState(initial = false)
+            val useAmoled by remember { settingsRepository.settingsFlow.map { it.useAmoledTheme } }
+                .collectAsStateWithLifecycle(initialValue = false)
             
             PrayerTimesTheme(useAmoled = useAmoled) {
                 MainScreen()
@@ -179,8 +184,7 @@ class MainActivity : ComponentActivity() {
                 )
             )
         } else {
-            // Already have location permission, fetch prayer times and request notification permission
-            fetchPrayerTimesAndSchedule()
+            // Already have location permission (prayer times were fetched in onCreate)
             requestNotificationPermission()
         }
     }
@@ -254,7 +258,7 @@ sealed class Screen(
 ) {
     data object PrayerTimes : Screen(
         route = "prayer_times",
-        title = "Prayer Times",
+        title = "Prayers",
         selectedIcon = Icons.Filled.Schedule,
         unselectedIcon = Icons.Outlined.Schedule
     )
@@ -278,9 +282,29 @@ private val screens = listOf(
     Screen.Settings
 )
 
+private val prayerPages = listOf("Today", "Month", "Tasbihat")
+
+/** Today / Month / Tasbihat: visible tabs, and swiping between them still works. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun PrayerTimesPager(pagerState: androidx.compose.foundation.pager.PagerState) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    val scope = rememberCoroutineScope()
+    Column(modifier = Modifier.fillMaxSize()) {
+        PrimaryTabRow(
+            selectedTabIndex = pagerState.currentPage,
+            containerColor = MaterialTheme.colorScheme.background,
+            contentColor = MaterialTheme.colorScheme.primary,
+            divider = { HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant) }
+        ) {
+            prayerPages.forEachIndexed { index, title ->
+                Tab(
+                    selected = pagerState.currentPage == index,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(index) } },
+                    text = { Text(title, style = MaterialTheme.typography.titleSmall) },
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize()
@@ -291,28 +315,6 @@ private fun PrayerTimesPager(pagerState: androidx.compose.foundation.pager.Pager
                 2 -> TasbihatScreen()
             }
         }
-
-        // Page indicator dots at bottom
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            repeat(3) { index ->
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (pagerState.currentPage == index)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                        )
-                )
-            }
-        }
     }
 }
 
@@ -320,7 +322,7 @@ private fun PrayerTimesPager(pagerState: androidx.compose.foundation.pager.Pager
 fun MainScreen() {
     val navController = rememberNavController()
     // Hoisted so tapping the Prayer Times tab can reset the pager back to the first page.
-    val prayerPagerState = rememberPagerState(pageCount = { 3 })
+    val prayerPagerState = rememberPagerState(pageCount = { prayerPages.size })
     val scope = rememberCoroutineScope()
 
     Scaffold(
@@ -366,7 +368,7 @@ fun MainScreen() {
                             selectedTextColor = MaterialTheme.colorScheme.primary,
                             unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                            indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
                         )
                     )
                 }
