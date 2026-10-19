@@ -60,6 +60,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.tuttoposto.prayertimes.data.repository.PrayerTimesRepository
 import com.tuttoposto.prayertimes.data.repository.SettingsRepository
 import com.tuttoposto.prayertimes.notifications.PrayerScheduleCoordinator
 import com.tuttoposto.prayertimes.notifications.NotificationScheduler
@@ -235,8 +236,11 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun fetchPrayerTimesAndSchedule() {
-        PrayerTimesSyncWorker.enqueueImmediate(this)
         lifecycleScope.launch {
+            // With nothing saved yet (e.g. the first attempt ran offline), restart a refresh
+            // that may be waiting in retry backoff instead of leaving the screen empty.
+            val nothingSaved = PrayerTimesRepository(this@MainActivity).getCachedPrayerTimes() == null
+            PrayerTimesSyncWorker.enqueueImmediate(this@MainActivity, replace = nothingSaved)
             try {
                 PrayerScheduleCoordinator(this@MainActivity).scheduleFromCache()
             } catch (e: Exception) {

@@ -29,10 +29,15 @@ import java.time.format.DateTimeFormatter
  *
  * The seconds countdown is a Chronometer the launcher ticks by itself. The widgets are also
  * redrawn on every wall-clock minute boundary with an exact, non-wakeup alarm, which moves the
- * progress bar and switches to the next prayer when a countdown reaches zero. Non-wakeup means no battery cost while the screen
- * is off: Android holds the alarm and delivers it the moment the screen turns on, so the widget
- * is current when it is looked at. (The previous inexact 60 s alarm could be deferred by up to
- * ten minutes on Android 12+, which is why the widget lagged until the app was opened.)
+ * progress bar. Non-wakeup means no battery cost while the screen is off: Android holds the alarm
+ * and delivers it the moment the screen turns on. (The previous inexact 60 s alarm could be
+ * deferred by up to ten minutes on Android 12+, which is why the widget lagged until the app was
+ * opened.)
+ *
+ * The Chronometer keeps counting past zero, though, so a countdown that ended while the screen was
+ * off would flash a negative time (e.g. -30:12) until the held minute tick arrived after unlock.
+ * A separate wakeup alarm therefore fires exactly when the current countdown ends (a handful of
+ * times a day) and switches the widget to the next prayer before the screen is next turned on.
  *
  * Every refresh re-arms the chain, so any app activity (opening the app, a sync, a reminder,
  * reboot, clock or time-zone change) also repairs a broken chain.
@@ -41,6 +46,7 @@ object WidgetUpdateHelper {
 
     private const val TAG = "PrayerWidget"
     private const val ACTION_TICK = "com.tuttoposto.prayertimes.WIDGET_UPDATE"
+    private const val ACTION_BOUNDARY = "com.tuttoposto.prayertimes.WIDGET_BOUNDARY"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
 
@@ -69,7 +75,9 @@ object WidgetUpdateHelper {
         try {
             val days = PrayerTimesRepository(app).getSchedulingDays()
             val now = System.currentTimeMillis()
-            render(app, PrayerTimeline.countdown(days, now), now)
+            val countdown = PrayerTimeline.countdown(days, now)
+            render(app, countdown, now)
+            scheduleBoundary(app, countdown?.targetMillis)
         } finally {
             // Even if reading or drawing failed, keep ticking so the widget recovers on its own.
             scheduleNextUpdate(app)
@@ -159,8 +167,29 @@ object WidgetUpdateHelper {
         alarmManager.setWindow(AlarmManager.RTC, at, 60_000L, pendingIntent)
     }
 
+    /** Wakes the device when the shown countdown ends, so a stale one is never seen going negative. */
+    private fun scheduleBoundary(context: Context, atMillis: Long?) {
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        val pendingIntent = boundaryIntent(context)
+        if (atMillis == null || atMillis <= System.currentTimeMillis()) {
+            alarmManager.cancel(pendingIntent)
+            return
+        }
+        try {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pendingIntent)
+                return
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Exact alarm access was revoked; widget switch may be delayed", e)
+        }
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMillis, pendingIntent)
+    }
+
     fun cancelScheduledUpdates(context: Context) {
-        context.getSystemService(AlarmManager::class.java).cancel(tickIntent(context))
+        val alarmManager = context.getSystemService(AlarmManager::class.java)
+        alarmManager.cancel(tickIntent(context))
+        alarmManager.cancel(boundaryIntent(context))
     }
 
     fun hasActiveWidgets(context: Context): Boolean {
@@ -168,6 +197,13 @@ object WidgetUpdateHelper {
         return manager.getAppWidgetIds(ComponentName(context, PrayerWidgetProvider::class.java)).isNotEmpty() ||
             manager.getAppWidgetIds(ComponentName(context, PrayerWidgetSmallProvider::class.java)).isNotEmpty()
     }
+
+    private fun boundaryIntent(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(
+            context, 1,
+            Intent(context, WidgetUpdateReceiver::class.java).setAction(ACTION_BOUNDARY),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
     private fun tickIntent(context: Context): PendingIntent =
         PendingIntent.getBroadcast(
