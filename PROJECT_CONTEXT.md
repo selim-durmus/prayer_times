@@ -34,6 +34,10 @@
 > (always exempt), or inexact without exact-alarm access. Asr school (Hanafi = Aladhan school 1,
 > default; Shafi'i = 0) is a setting; each saved day records its school, a mismatch triggers a
 > re-download, and days of different schools are never merged.
+>
+> November 2026: the Today list ends with a Tahajjud row. `PrayerTimeline.tahajjud` computes the
+> last third of the night (Maghrib to the next Fajr) from the scheduling days. It is display-only:
+> not in `PrayerTimesCache.prayers`, so no saved data, reminders, countdown or widgets change.
 
 This document summarizes the **Prayer Times** Android application (`com.tuttoposto.prayertimes`): purpose, stack, architecture, file layout, data/UI layers, design choices, constraints, and dependency versions. It is intended to onboard a reader (or an AI session) with **no prior exposure** to the repo.
 

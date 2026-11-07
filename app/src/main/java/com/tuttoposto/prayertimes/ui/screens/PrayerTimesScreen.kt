@@ -112,7 +112,7 @@ private fun TodayContent(state: PrayerTimesUiState.Success, viewModel: PrayerTim
         state.asrNote?.let { note ->
             item(key = "asr") { Banner(Icons.Outlined.Info, note) }
         }
-        item(key = "list") { PrayerList(state.prayers) }
+        item(key = "list") { PrayerList(state.prayers, state.tahajjud) }
         item(key = "footer") {
             Text(
                 text = "Saved through ${state.savedThrough} · Downloaded ${state.downloaded}\nPull down to refresh",
@@ -221,18 +221,20 @@ private fun CountdownCard(countdown: PrayerCountdown, now: Long) {
 }
 
 @Composable
-private fun PrayerList(prayers: List<PrayerTimeDisplay>) {
+private fun PrayerList(prayers: List<PrayerTimeDisplay>, tahajjud: PrayerTimeDisplay?) {
+    // Tahajjud only highlights its own row; "Next" stays on the five daily prayers.
     val next = prayers.firstOrNull { it.status == PrayerStatus.UPCOMING }?.name
         .takeIf { prayers.none { it.status == PrayerStatus.CURRENT } }
+    val rows = prayers + listOfNotNull(tahajjud)
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(vertical = 6.dp)) {
-            prayers.forEachIndexed { index, prayer ->
+            rows.forEachIndexed { index, prayer ->
                 PrayerRow(prayer, isNext = prayer.name == next)
-                if (index < prayers.lastIndex) {
+                if (index < rows.lastIndex) {
                     HorizontalDivider(
                         color = PrayerTimesColors.divider,
                         modifier = Modifier.padding(horizontal = 20.dp)

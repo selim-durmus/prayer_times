@@ -63,6 +63,30 @@ class PrayerCountdownTest {
         assertNull(PrayerTimeline.countdown(emptyList(), at("12:00")))
     }
 
+    // Sunset 18:30 to Fajr 05:40 is 670 minutes, so the last third starts at 01:56:40.
+    @Test fun tahajjudIsTheLastThirdOfTonightRoundedUpToTheMinute() {
+        val t = PrayerTimeline.tahajjud(days, at("20:00"))!!
+        assertEquals("Tahajjud", t.name)
+        assertEquals(at("01:57", today.plusDays(1)), t.startTimeMillis)
+        assertEquals(at("05:40", today.plusDays(1)), t.endTimeMillis)
+    }
+
+    @Test fun tahajjudRunningNowBelongsToLastNight() {
+        val t = PrayerTimeline.tahajjud(days, at("03:00"))!!
+        assertEquals(at("01:57"), t.startTimeMillis)
+        assertEquals(at("05:40"), t.endTimeMillis)
+    }
+
+    @Test fun tahajjudMovesToTonightOnceFajrEnters() {
+        val t = PrayerTimeline.tahajjud(days, at("05:40"))!!
+        assertEquals(at("01:57", today.plusDays(1)), t.startTimeMillis)
+    }
+
+    @Test fun tahajjudNeedsAnEveningAndTheFollowingMorning() {
+        assertNull(PrayerTimeline.tahajjud(listOf(day(today)), at("20:00")))
+        assertNull(PrayerTimeline.tahajjud(days, at("06:00", today.plusDays(1))))
+    }
+
     @Test fun minutesRoundUpAndReachZeroAtTheTarget() {
         assertEquals("2h 15m", PrayerTimeline.formatMinutes((2 * 60 + 14) * 60_000L + 30_000))
         assertEquals("1h 0m", PrayerTimeline.formatMinutes(60 * 60_000L))

@@ -5,6 +5,7 @@ Android app that shows **Islamic prayer times** for your location using the [Ala
 ## Features
 
 - Daily prayer list with optional Hijri date and a monthly calendar view  
+- Tahajjud row (last third of the night, sunset to Fajr) that highlights while it's in; no reminders  
 - Prayer-end reminders and optional prayer-start alerts (normal or alarm-style playback)  
 - Home screen widgets, Qibla direction, and settings (including AMOLED theme)
 - Offline prayer times: current and next month saved on-device, with notifications and Ezan scheduled from cache.

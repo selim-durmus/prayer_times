@@ -44,6 +44,20 @@ object PrayerTimeline {
     }
 
     /**
+     * The last third of the night (sunset to Fajr), ending at Fajr: the one running now, otherwise
+     * tonight's. Worked out from saved days and kept out of [PrayerTimesCache.prayers], so reminders,
+     * the countdown and widgets ignore it. The start rounds up so the row never lights early.
+     */
+    fun tahajjud(days: List<PrayerTimesCache>, now: Long): PrayerTime? =
+        days.sortedBy { it.date }.zipWithNext().firstNotNullOfOrNull { (evening, morning) ->
+            val sunset = evening.prayers.firstOrNull { Prayer.fromName(it.name) == Prayer.MAGHRIB }
+            val fajr = morning.prayers.firstOrNull { Prayer.fromName(it.name) == Prayer.FAJR }
+            if (sunset == null || fajr == null || fajr.startTimeMillis <= now) return@firstNotNullOfOrNull null
+            val lastThird = fajr.startTimeMillis - (fajr.startTimeMillis - sunset.startTimeMillis) / 3
+            PrayerTime("Tahajjud", nextMinuteBoundary(lastThird - 1), fajr.startTimeMillis)
+        }
+
+    /**
      * Whole minutes, rounded up: with 2h 14m 30s left this shows "2h 15m", and it reaches "0m"
      * exactly at the prayer time instead of a minute early.
      */

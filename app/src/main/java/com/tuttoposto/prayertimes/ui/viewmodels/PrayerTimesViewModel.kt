@@ -109,6 +109,7 @@ class PrayerTimesViewModel(application: Application) : AndroidViewModel(applicat
         } else "an earlier version"
         return PrayerTimesUiState.Success(
             prayers = today.prayers.map { it.toDisplayModel(now, zone) },
+            tahajjud = PrayerTimeline.tahajjud(days, now)?.toDisplayModel(now, zone),
             dateLabel = today.date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM")),
             hijriDate = today.hijriDate,
             locationName = place?.takeIf { it.first == coordinates }?.second
@@ -217,6 +218,7 @@ sealed class PrayerTimesUiState {
     data object NoData : PrayerTimesUiState()
     data class Success(
         val prayers: List<PrayerTimeDisplay>,
+        val tahajjud: PrayerTimeDisplay? = null,
         val dateLabel: String,
         val locationName: String,
         val hijriDate: String? = null,
